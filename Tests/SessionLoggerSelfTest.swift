@@ -49,6 +49,21 @@ struct SessionLoggerSelfTest {
             throw SelfTestError.invalidRecentWindow
         }
 
+        let formattedSummary = SummaryTextFormatter.format(
+            overview: "全体の概要です。",
+            keyPoints: ["最初の要点", "2つ目の要点"]
+        )
+        guard formattedSummary == "全体の概要です。\n\n• 最初の要点\n• 2つ目の要点" else {
+            throw SelfTestError.invalidSummaryFormat
+        }
+
+        let parsedSummary = SummaryTextFormatter.format(
+            rawResponse: "<overview> 講義の概要です。 </overview>\n<point> 論点A </point>\n<point>論点B</point>"
+        )
+        guard parsedSummary == "講義の概要です。\n\n• 論点A\n• 論点B" else {
+            throw SelfTestError.invalidSummaryFormat
+        }
+
         print("SessionLogger self-test passed")
     }
 }
@@ -58,4 +73,5 @@ private enum SelfTestError: Error {
     case invalidTranscript
     case invalidEvents
     case invalidRecentWindow
+    case invalidSummaryFormat
 }

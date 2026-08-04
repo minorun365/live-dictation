@@ -11,7 +11,7 @@ Macのマイクで英語を文字起こしし、リアルタイムに日本語�
 
 ## インストール
 
-1. [Releases](https://github.com/minorun365/live-translator-macos/releases/latest)から`LiveTranslator-v1.1.0-macos-arm64.zip`をダウンロードします。
+1. [Releases](https://github.com/minorun365/live-translator-macos/releases/latest)から`LiveTranslator-v1.1.1-macos-arm64.zip`をダウンロードします。
 2. ZIPを展開し、`LiveTranslator.app`を「アプリケーション」フォルダへ移動します。
 3. 一度起動したあと、macOSの「システム設定」→「プライバシーとセキュリティ」→「このまま開く」を選びます。
 4. 起動後、マイクの利用を許可します。
@@ -20,7 +20,7 @@ Macのマイクで英語を文字起こしし、リアルタイムに日本語�
 
 ## 使い方
 
-「録音を開始」を押すと、英語、日本語、直近5分の要約が3列で表示されます。英語と日本語は全文を表示し続け、要約は30秒ごとに更新します。上へスクロールすると過去の文章を読み返せます。「停止」を押すと録音とログが保存されます。
+「録音を開始」を押すと、英語、日本語、直近5分の要約が3列で表示されます。英語と日本語は全文を表示し続け、要約は短い概要と箇条書きで30秒ごとに更新します。上へスクロールすると過去の文章を読み返せます。「停止」を押すと録音とログが保存されます。
 
 保存先：`~/Library/Application Support/LiveTranslator/Sessions/`
 
