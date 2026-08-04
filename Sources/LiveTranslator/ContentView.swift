@@ -85,6 +85,7 @@ struct TranscriptHistory: View {
         HStack(spacing: 14) {
             TranscriptPane(title: "English", text: model.englishText)
             TranscriptPane(title: "日本語", text: model.japaneseText)
+            TranscriptPane(title: "直近5分の要約", text: model.summaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

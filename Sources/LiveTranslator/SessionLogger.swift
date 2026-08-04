@@ -26,7 +26,7 @@ final class SessionLogger {
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: eventsURL.path, contents: nil)
         eventsHandle = try FileHandle(forWritingTo: eventsURL)
-        updateTranscript(english: "", japanese: "")
+        updateTranscript(english: "", japanese: "", summary: "")
     }
 
     static func sessionsRootURL() throws -> URL {
@@ -41,13 +41,13 @@ final class SessionLogger {
             .appendingPathComponent("Sessions", isDirectory: true)
     }
 
-    func updateTranscript(english: String, japanese: String) {
+    func updateTranscript(english: String, japanese: String, summary: String) {
         let markdown = """
         # Live Translator
 
         - Started: \(startedAt.ISO8601Format())
         - Updated: \(Date().ISO8601Format())
-        - Processing: On-device speech recognition and Apple Translation
+        - Processing: On-device speech recognition, Apple Translation, and Apple Foundation Models
 
         ## English
 
@@ -56,6 +56,10 @@ final class SessionLogger {
         ## 日本語
 
         \(japanese)
+
+        ## 直近5分の要約
+
+        \(summary)
         """
 
         do {
@@ -77,6 +81,10 @@ final class SessionLogger {
             type: "translation",
             payload: ["source": source, "target": target]
         )
+    }
+
+    func appendSummary(_ summary: String) {
+        appendEvent(type: "summary", payload: ["text": summary])
     }
 
     func appendEvent(type: String, payload: [String: String]) {

@@ -10,6 +10,7 @@ mkdir -p "${MODULE_CACHE}"
 swiftc \
     -module-cache-path "${MODULE_CACHE}" \
     "${PROJECT_DIR}/Sources/LiveTranslator/SessionLogger.swift" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/RecentTranscriptWindow.swift" \
     "${PROJECT_DIR}/Tests/SessionLoggerSelfTest.swift" \
     -o "${TEST_BINARY}"
 

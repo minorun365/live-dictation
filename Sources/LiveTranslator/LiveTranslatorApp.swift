@@ -9,9 +9,9 @@ struct LiveTranslatorApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(model: model)
-                .frame(minWidth: 760, minHeight: 520)
+                .frame(minWidth: 1_020, minHeight: 520)
         }
-        .defaultSize(width: 920, height: 620)
+        .defaultSize(width: 1_220, height: 620)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .appTermination) {
