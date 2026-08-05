@@ -6,11 +6,19 @@ final class SessionLogger {
 
     private let transcriptURL: URL
     private let eventsURL: URL
+    private let titleURL: URL
+    private let modeURL: URL
+    private let mode: TranscriptionMode
     private var eventsHandle: FileHandle?
     private let startedAt = Date()
     private let encoder = JSONEncoder()
 
-    init(now: Date = Date(), rootURL: URL? = nil) throws {
+    init(
+        now: Date = Date(),
+        rootURL: URL? = nil,
+        mode: TranscriptionMode = .englishTranslation
+    ) throws {
+        self.mode = mode
         encoder.dateEncodingStrategy = .iso8601
 
         let root = try rootURL ?? Self.sessionsRootURL()
@@ -22,10 +30,14 @@ final class SessionLogger {
         audioURL = directoryURL.appendingPathComponent("audio.caf")
         transcriptURL = directoryURL.appendingPathComponent("transcript.md")
         eventsURL = directoryURL.appendingPathComponent("events.jsonl")
+        titleURL = directoryURL.appendingPathComponent("title.txt")
+        modeURL = directoryURL.appendingPathComponent("mode.txt")
 
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: eventsURL.path, contents: nil)
         eventsHandle = try FileHandle(forWritingTo: eventsURL)
+        try mode.rawValue.write(to: modeURL, atomically: true, encoding: .utf8)
+        updateTitle("音声セッション")
         updateTranscript(english: "", japanese: "", summary: "")
     }
 
@@ -43,11 +55,12 @@ final class SessionLogger {
 
     func updateTranscript(english: String, japanese: String, summary: String) {
         let markdown = """
-        # Live Translator
+        # 文字起こしくん
 
         - Started: \(startedAt.ISO8601Format())
         - Updated: \(Date().ISO8601Format())
-        - Processing: On-device speech recognition, Apple Translation, and Apple Foundation Models
+        - Mode: \(mode.rawValue)
+        - Processing: On-device Apple Speech, Translation (English mode), and Foundation Models
 
         ## English
 
@@ -85,6 +98,14 @@ final class SessionLogger {
 
     func appendSummary(_ summary: String) {
         appendEvent(type: "summary", payload: ["text": summary])
+    }
+
+    func updateTitle(_ title: String) {
+        do {
+            try title.write(to: titleURL, atomically: true, encoding: .utf8)
+        } catch {
+            // Recording must continue even if a single metadata write fails.
+        }
     }
 
     func appendEvent(type: String, payload: [String: String]) {

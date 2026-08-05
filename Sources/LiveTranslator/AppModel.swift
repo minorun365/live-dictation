@@ -12,7 +12,10 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var englishText = ""
     @Published private(set) var japaneseText = ""
     @Published private(set) var summaryText = ""
-    @Published private(set) var statusMessage = "録音を開始すると、英語を日本語へ翻訳します"
+    @Published private(set) var sessionHistory: [SessionHistoryItem] = []
+    @Published private(set) var selectedSessionID: String?
+    @Published private(set) var selectedMode: TranscriptionMode = .japanese
+    @Published private(set) var statusMessage = "録音を開始すると、日本語を文字起こしします"
     @Published private(set) var errorMessage: String?
 
     private let audioEngine = AVAudioEngine()
@@ -32,6 +35,7 @@ final class AppModel: NSObject, ObservableObject {
     private var sessionFinalizedEnglish = ""
     private var sessionFinalizedJapanese = ""
     private var sessionSummaryText = ""
+    private var activeMode: TranscriptionMode = .japanese
     private var currentSessionID = UUID()
     private var pendingFinalTranslations: [TranslationWork] = []
     private var finalTranslationInProgress = false
@@ -42,6 +46,7 @@ final class AppModel: NSObject, ObservableObject {
     private let minimumSummaryCharacters = 120
 
     private var logger: SessionLogger?
+    private var selectedSessionTranscript: SavedSessionTranscript?
     private var audioFile: AVAudioFile?
     private let captureBridge = AnalyzerCaptureBridge()
 
@@ -55,6 +60,45 @@ final class AppModel: NSObject, ObservableObject {
         }
         translationContinuation = continuation
         super.init()
+        reloadSessionHistory()
+    }
+
+    var displayedEnglishText: String {
+        selectedSessionTranscript?.english ?? englishText
+    }
+
+    var displayedJapaneseText: String {
+        selectedSessionTranscript?.japanese ?? japaneseText
+    }
+
+    var displayedSummaryText: String {
+        selectedSessionTranscript?.summary ?? summaryText
+    }
+
+    var displayedMode: TranscriptionMode {
+        selectedSessionTranscript?.mode ?? (isRecording ? activeMode : selectedMode)
+    }
+
+    func selectMode(_ mode: TranscriptionMode) {
+        guard !isRecording else { return }
+        selectedMode = mode
+        showCurrentSession()
+        statusMessage = idleStatusMessage(for: mode)
+    }
+
+    func showCurrentSession() {
+        selectedSessionID = nil
+        selectedSessionTranscript = nil
+    }
+
+    func selectSession(_ item: SessionHistoryItem) {
+        do {
+            selectedSessionTranscript = try SessionHistoryStore.loadTranscript(for: item)
+            selectedSessionID = item.id
+            errorMessage = nil
+        } catch {
+            errorMessage = "セッションを読み込めません: \(error.localizedDescription)"
+        }
     }
 
     func toggleRecording() async {
@@ -66,15 +110,16 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func runTranslationLoop(with session: TranslationSession) async {
+        var isPrepared = false
         do {
-            statusMessage = "翻訳モデルを準備しています…"
-            try await session.prepareTranslation()
-            if !isRecording {
-                statusMessage = "録音を開始すると、英語を日本語へ翻訳します"
-            }
-
             for await work in translationStream {
                 guard !Task.isCancelled else { return }
+
+                if !isPrepared {
+                    statusMessage = "翻訳モデルを準備しています…"
+                    try await session.prepareTranslation()
+                    isPrepared = true
+                }
 
                 while !pendingFinalTranslations.isEmpty {
                     let finalWork = pendingFinalTranslations.removeFirst()
@@ -163,6 +208,8 @@ final class AppModel: NSObject, ObservableObject {
 
     private func startRecording() async {
         errorMessage = nil
+        showCurrentSession()
+        activeMode = selectedMode
 
         guard await requestMicrophonePermission() else { return }
         guard SpeechTranscriber.isAvailable else {
@@ -171,12 +218,12 @@ final class AppModel: NSObject, ObservableObject {
         }
 
         do {
-            statusMessage = "英語の音声認識を準備中…"
+            statusMessage = "\(activeMode.label)の音声認識を準備中…"
 
             guard let locale = await SpeechTranscriber.supportedLocale(
-                equivalentTo: Locale(identifier: "en-US")
+                equivalentTo: Locale(identifier: activeMode.localeIdentifier)
             ) else {
-                throw AppError.englishUnsupported
+                throw AppError.languageUnsupported(activeMode)
             }
 
             let transcriber = SpeechTranscriber(
@@ -193,11 +240,11 @@ final class AppModel: NSObject, ObservableObject {
             }
             if !modelIsInstalled,
                await AssetInventory.status(forModules: modules) != .installed {
-                statusMessage = "英語の音声認識モデルを取得中…"
+                statusMessage = "\(activeMode.label)の音声認識モデルを取得中…"
                 guard let request = try await AssetInventory.assetInstallationRequest(
                     supporting: modules
                 ) else {
-                    throw AppError.modelUnavailable
+                    throw AppError.modelUnavailable(activeMode)
                 }
                 try await request.downloadAndInstall()
             }
@@ -227,6 +274,8 @@ final class AppModel: NSObject, ObservableObject {
             }
 
             currentSessionID = UUID()
+            finalizedEnglish = ""
+            finalizedJapanese = ""
             sessionFinalizedEnglish = ""
             sessionFinalizedJapanese = ""
             sessionSummaryText = ""
@@ -238,7 +287,7 @@ final class AppModel: NSObject, ObservableObject {
             englishText = finalizedEnglish
             japaneseText = finalizedJapanese
 
-            let logger = try SessionLogger()
+            let logger = try SessionLogger(mode: activeMode)
             self.logger = logger
             let audioFile = try AVAudioFile(
                 forWriting: logger.audioURL,
@@ -262,7 +311,7 @@ final class AppModel: NSObject, ObservableObject {
             startAnalyzerTask(analyzer: analyzer, inputStream: inputStream)
 
             isRecording = true
-            statusMessage = "録音・翻訳中"
+            statusMessage = recordingStatusMessage(for: activeMode)
             startSummaryLoop()
             logger.appendEvent(
                 type: "session_started",
@@ -303,16 +352,29 @@ final class AppModel: NSObject, ObservableObject {
         analyzerTask?.cancel()
         resultsTask?.cancel()
 
-        if !volatileEnglish.isEmpty {
+        if activeMode == .englishTranslation, !volatileEnglish.isEmpty {
             let finalVolatileEnglish = volatileEnglish
             commitFinalEnglish(finalVolatileEnglish)
             volatileEnglish = ""
             volatileJapanese = ""
             enqueueTranslation(sourceText: finalVolatileEnglish, isFinal: true)
+        } else if activeMode == .japanese, !volatileJapanese.isEmpty {
+            let finalVolatileJapanese = volatileJapanese
+            volatileJapanese = ""
+            commitFinalJapanese(finalVolatileJapanese)
         }
 
-        await waitForFinalTranslations()
+        if activeMode == .englishTranslation {
+            await waitForFinalTranslations()
+        }
         await refreshRecentSummary(force: true)
+
+        logger?.updateTitle(
+            SessionTitleFormatter.make(
+                summary: sessionSummaryText,
+                japanese: sessionFinalizedJapanese
+            )
+        )
 
         englishText = finalizedEnglish
         japaneseText = finalizedJapanese
@@ -328,6 +390,7 @@ final class AppModel: NSObject, ObservableObject {
         inputContinuation = nil
         audioFile = nil
         logger = nil
+        reloadSessionHistory()
         statusMessage = "停止しました。ログはMac内に保存済みです"
     }
 
@@ -368,6 +431,11 @@ final class AppModel: NSObject, ObservableObject {
     private func handleTranscription(text: String, isFinal: Bool) {
         guard analyzer != nil, !text.isEmpty else { return }
 
+        if activeMode == .japanese {
+            handleJapaneseTranscription(text: text, isFinal: isFinal)
+            return
+        }
+
         if isFinal {
             volatileEnglish = ""
             volatileJapanese = ""
@@ -386,6 +454,20 @@ final class AppModel: NSObject, ObservableObject {
         updateSavedTranscript()
     }
 
+    private func handleJapaneseTranscription(text: String, isFinal: Bool) {
+        if isFinal {
+            volatileJapanese = ""
+            commitFinalJapanese(text)
+        } else {
+            volatileJapanese = text
+            japaneseText = joinJapanese(finalizedJapanese, volatileJapanese)
+        }
+
+        logger?.appendRecognition(text: sessionJapaneseText(), isFinal: isFinal)
+        updateSavedTranscript()
+        statusMessage = recordingStatusMessage(for: .japanese)
+    }
+
     private func handleRecognitionFailure(_ error: any Error) {
         logger?.appendEvent(
             type: "recognizer_error",
@@ -399,6 +481,13 @@ final class AppModel: NSObject, ObservableObject {
         finalizedEnglish = joinEnglish(finalizedEnglish, text)
         sessionFinalizedEnglish = joinEnglish(sessionFinalizedEnglish, text)
         englishText = joinEnglish(finalizedEnglish, volatileEnglish)
+    }
+
+    private func commitFinalJapanese(_ text: String) {
+        finalizedJapanese = joinJapanese(finalizedJapanese, text)
+        sessionFinalizedJapanese = joinJapanese(sessionFinalizedJapanese, text)
+        japaneseText = joinJapanese(finalizedJapanese, volatileJapanese)
+        recentSummaryWindow.append(text)
     }
 
     private func enqueueTranslation(sourceText: String, isFinal: Bool) {
@@ -541,6 +630,12 @@ final class AppModel: NSObject, ObservableObject {
             sessionSummaryText = summary
             lastSummarizedSource = source
             logger?.appendSummary(summary)
+            logger?.updateTitle(
+                SessionTitleFormatter.make(
+                    summary: summary,
+                    japanese: sessionFinalizedJapanese
+                )
+            )
             updateSavedTranscript()
         } catch is CancellationError {
             return
@@ -615,6 +710,32 @@ final class AppModel: NSObject, ObservableObject {
             }
         @unknown default:
             return "要約を利用できません"
+        }
+    }
+
+    private func reloadSessionHistory() {
+        do {
+            sessionHistory = try SessionHistoryStore.loadItems()
+        } catch {
+            sessionHistory = []
+        }
+    }
+
+    private func idleStatusMessage(for mode: TranscriptionMode) -> String {
+        switch mode {
+        case .japanese:
+            "録音を開始すると、日本語を文字起こしします"
+        case .englishTranslation:
+            "録音を開始すると、英語を日本語へ翻訳します"
+        }
+    }
+
+    private func recordingStatusMessage(for mode: TranscriptionMode) -> String {
+        switch mode {
+        case .japanese:
+            "日本語を文字起こし中"
+        case .englishTranslation:
+            "録音・翻訳中"
         }
     }
 }
@@ -725,18 +846,18 @@ private final class ConverterInputProvider: @unchecked Sendable {
 
 private enum AppError: LocalizedError {
     case microphoneUnavailable
-    case englishUnsupported
-    case modelUnavailable
+    case languageUnsupported(TranscriptionMode)
+    case modelUnavailable(TranscriptionMode)
     case audioFormatUnavailable
 
     var errorDescription: String? {
         switch self {
         case .microphoneUnavailable:
             "マイクから音声を取得できません。"
-        case .englishUnsupported:
-            "英語の長時間音声認識を利用できません。"
-        case .modelUnavailable:
-            "英語の音声認識モデルを準備できません。"
+        case .languageUnsupported(let mode):
+            "\(mode.label)の長時間音声認識を利用できません。"
+        case .modelUnavailable(let mode):
+            "\(mode.label)の音声認識モデルを準備できません。"
         case .audioFormatUnavailable:
             "音声認識用の音声形式を利用できません。"
         }

@@ -2,20 +2,20 @@ import SwiftUI
 
 @main
 @available(macOS 26.4, *)
-struct LiveTranslatorApp: App {
+struct LiveDictationApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
 
     var body: some Scene {
         WindowGroup {
             ContentView(model: model)
-                .frame(minWidth: 1_020, minHeight: 520)
+                .frame(minWidth: 1_250, minHeight: 520)
         }
-        .defaultSize(width: 1_220, height: 620)
+        .defaultSize(width: 1_470, height: 620)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .appTermination) {
-                Button("リアルタイム翻訳を終了") {
+                Button("文字起こしくんを終了") {
                     model.stopRecordingIfNeeded()
                     NSApplication.shared.terminate(nil)
                 }

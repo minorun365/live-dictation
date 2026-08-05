@@ -5,28 +5,28 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>ja</string>
     <key>CFBundleDisplayName</key>
-    <string>リアルタイム翻訳</string>
+    <string>文字起こしくん</string>
     <key>CFBundleExecutable</key>
-    <string>LiveTranslator</string>
+    <string>LiveDictation</string>
     <key>CFBundleIdentifier</key>
-    <string>com.minorun365.LiveTranslator</string>
+    <string>com.minorun365.LiveDictation</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>LiveTranslator</string>
+    <string>文字起こしくん</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.1.1</string>
+    <string>1.2.0</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>4</string>
     <key>LSMinimumSystemVersion</key>
     <string>26.4</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>英語音声を文字起こしし、日本語へ翻訳するためにマイクを使用します。</string>
+    <string>会議や講義の音声を文字起こししてMac内に保存するためにマイクを使用します。</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>英語音声をリアルタイムで文字起こしするために音声認識を使用します。</string>
+    <string>日本語または英語の音声をリアルタイムで文字起こしするために音声認識を使用します。</string>
 </dict>
 </plist>

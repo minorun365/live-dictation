@@ -11,6 +11,23 @@ struct ContentView: View {
     )
 
     var body: some View {
+        HStack(spacing: 0) {
+            SessionSidebar(model: model)
+                .frame(width: 250)
+
+            Divider()
+
+            mainContent
+        }
+        .translationTask(translationConfiguration) { session in
+            await model.runTranslationLoop(with: session)
+        }
+        .onDisappear {
+            model.stopRecordingIfNeeded()
+        }
+    }
+
+    private var mainContent: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Circle()
@@ -22,6 +39,22 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
 
                 Spacer()
+
+                Picker(
+                    "文字起こしモード",
+                    selection: Binding(
+                        get: { model.selectedMode },
+                        set: { model.selectMode($0) }
+                    )
+                ) {
+                    ForEach(TranscriptionMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 210)
+                .disabled(model.isRecording)
 
                 Button("保存先を開く") {
                     model.openSessionsFolder()
@@ -68,12 +101,96 @@ struct ContentView: View {
             .padding(.horizontal, 22)
             .padding(.vertical, 16)
         }
-        .translationTask(translationConfiguration) { session in
-            await model.runTranslationLoop(with: session)
+    }
+}
+
+@available(macOS 26.4, *)
+private struct SessionSidebar: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("セッション")
+                .font(.headline)
+                .padding(.horizontal, 16)
+                .padding(.top, 18)
+                .padding(.bottom, 10)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    SidebarButton(
+                        title: "現在の文字起こし",
+                        subtitle: model.isRecording ? "録音中" : nil,
+                        systemImage: "waveform",
+                        isSelected: model.selectedSessionID == nil
+                    ) {
+                        model.showCurrentSession()
+                    }
+
+                    if !model.sessionHistory.isEmpty {
+                        Text("履歴")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                            .padding(.top, 14)
+                            .padding(.bottom, 4)
+                    }
+
+                    ForEach(model.sessionHistory) { item in
+                        SidebarButton(
+                            title: item.title,
+                            subtitle: "\(item.displayDate)・\(item.mode.label)",
+                            systemImage: "text.document",
+                            isSelected: model.selectedSessionID == item.id
+                        ) {
+                            model.selectSession(item)
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 12)
+            }
         }
-        .onDisappear {
-            model.stopRecordingIfNeeded()
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+private struct SidebarButton: View {
+    let title: String
+    let subtitle: String?
+    let systemImage: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: systemImage)
+                    .frame(width: 16)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.callout)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .background(
+                isSelected ? Color.accentColor.opacity(0.14) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 }
 
@@ -83,9 +200,14 @@ struct TranscriptHistory: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            TranscriptPane(title: "English", text: model.englishText)
-            TranscriptPane(title: "日本語", text: model.japaneseText)
-            TranscriptPane(title: "直近5分の要約", text: model.summaryText)
+            if model.displayedMode == .englishTranslation {
+                TranscriptPane(title: "English", text: model.displayedEnglishText)
+            }
+            TranscriptPane(
+                title: model.displayedMode == .japanese ? "日本語文字起こし" : "日本語",
+                text: model.displayedJapaneseText
+            )
+            TranscriptPane(title: "直近5分の要約", text: model.displayedSummaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

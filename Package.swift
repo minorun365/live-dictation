@@ -3,16 +3,16 @@
 import PackageDescription
 
 let package = Package(
-    name: "LiveTranslator",
+    name: "LiveDictation",
     platforms: [
         .macOS(.v26)
     ],
     products: [
-        .executable(name: "LiveTranslator", targets: ["LiveTranslator"])
+        .executable(name: "LiveDictation", targets: ["LiveDictation"])
     ],
     targets: [
         .executableTarget(
-            name: "LiveTranslator",
+            name: "LiveDictation",
             path: "Sources/LiveTranslator"
         )
     ]

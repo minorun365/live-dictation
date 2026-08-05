@@ -9,7 +9,8 @@ struct SessionLoggerSelfTest {
 
         let logger = try SessionLogger(
             now: Date(timeIntervalSince1970: 0),
-            rootURL: root
+            rootURL: root,
+            mode: .japanese
         )
         logger.updateTranscript(
             english: "Hello",
@@ -18,6 +19,7 @@ struct SessionLoggerSelfTest {
         )
         logger.appendTranslation(source: "Hello", target: "こんにちは")
         logger.appendSummary("直近の挨拶について話しています。")
+        logger.updateTitle("ローカル翻訳の説明")
         logger.close()
 
         let transcriptURL = logger.directoryURL.appendingPathComponent("transcript.md")
@@ -64,6 +66,34 @@ struct SessionLoggerSelfTest {
             throw SelfTestError.invalidSummaryFormat
         }
 
+        let olderLogger = try SessionLogger(
+            now: Date(timeIntervalSince1970: -60),
+            rootURL: root
+        )
+        olderLogger.updateTranscript(
+            english: "Older",
+            japanese: "古いセッションです。",
+            summary: "古い内容を説明しました。"
+        )
+        olderLogger.updateTitle("古い内容の説明")
+        olderLogger.close()
+
+        let history = try SessionHistoryStore.loadItems(rootURL: root)
+        guard history.count == 2,
+              history[0].title == "ローカル翻訳の説明",
+              history[0].mode == .japanese,
+              history[1].title == "古い内容の説明" else {
+            throw SelfTestError.invalidSessionHistory
+        }
+
+        let savedTranscript = try SessionHistoryStore.loadTranscript(for: history[0])
+        guard savedTranscript.english == "Hello",
+              savedTranscript.japanese == "こんにちは",
+              savedTranscript.summary == "直近の挨拶について話しています。",
+              savedTranscript.mode == .japanese else {
+            throw SelfTestError.invalidSavedSession
+        }
+
         print("SessionLogger self-test passed")
     }
 }
@@ -74,4 +104,6 @@ private enum SelfTestError: Error {
     case invalidEvents
     case invalidRecentWindow
     case invalidSummaryFormat
+    case invalidSessionHistory
+    case invalidSavedSession
 }
