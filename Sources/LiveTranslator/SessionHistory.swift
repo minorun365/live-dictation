@@ -27,6 +27,7 @@ struct SessionHistoryItem: Identifiable, Hashable {
     let startedAt: Date
     let title: String
     let mode: TranscriptionMode
+    let needsTitleUpgrade: Bool
 
     var displayDate: String {
         Self.displayDateFormatter.string(from: startedAt)
@@ -47,7 +48,14 @@ struct SavedSessionTranscript {
     let mode: TranscriptionMode
 }
 
+struct SessionTitleSource {
+    let japanese: String
+    let timelineSummaries: [String]
+}
+
 enum SessionHistoryStore {
+    static let currentTitleVersion = 3
+
     static func loadItems(rootURL: URL? = nil) throws -> [SessionHistoryItem] {
         let root = try rootURL ?? SessionLogger.sessionsRootURL()
         guard FileManager.default.fileExists(atPath: root.path) else { return [] }
@@ -74,6 +82,7 @@ enum SessionHistoryStore {
                 japanese: transcript?.japanese ?? ""
             )
             let mode = loadMode(from: directory)
+            let titleVersion = loadTitleVersion(from: directory)
             let startedAt = date(fromDirectoryName: directory.lastPathComponent)
                 ?? (try? directory.resourceValues(forKeys: [.creationDateKey]).creationDate)
                 ?? .distantPast
@@ -83,7 +92,8 @@ enum SessionHistoryStore {
                 directoryURL: directory,
                 startedAt: startedAt,
                 title: title,
-                mode: mode
+                mode: mode,
+                needsTitleUpgrade: titleVersion < currentTitleVersion
             )
         }
         .sorted { $0.startedAt > $1.startedAt }
@@ -91,6 +101,27 @@ enum SessionHistoryStore {
 
     static func loadTranscript(for item: SessionHistoryItem) throws -> SavedSessionTranscript {
         try loadTranscript(from: item.directoryURL)
+    }
+
+    static func loadTitleSource(for item: SessionHistoryItem) throws -> SessionTitleSource {
+        let transcript = try loadTranscript(from: item.directoryURL)
+        return SessionTitleSource(
+            japanese: transcript.japanese,
+            timelineSummaries: try loadTimelineSummaries(from: item.directoryURL)
+        )
+    }
+
+    static func saveGeneratedTitle(_ title: String, for item: SessionHistoryItem) throws {
+        try title.write(
+            to: item.directoryURL.appendingPathComponent("title.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try String(currentTitleVersion).write(
+            to: item.directoryURL.appendingPathComponent("title-version.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     private static func loadTranscript(from directory: URL) throws -> SavedSessionTranscript {
@@ -116,6 +147,47 @@ enum SessionHistoryStore {
         return TranscriptionMode(rawValue: rawValue) ?? .englishTranslation
     }
 
+    private static func loadTitleVersion(from directory: URL) -> Int {
+        guard let value = try? String(
+            contentsOf: directory.appendingPathComponent("title-version.txt"),
+            encoding: .utf8
+        ).trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return 0
+        }
+        return Int(value) ?? 0
+    }
+
+    private static func loadTimelineSummaries(from directory: URL) throws -> [String] {
+        let eventsURL = directory.appendingPathComponent("events.jsonl")
+        guard FileManager.default.fileExists(atPath: eventsURL.path) else { return [] }
+
+        let data = try String(contentsOf: eventsURL, encoding: .utf8)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let events = data
+            .split(whereSeparator: \Character.isNewline)
+            .compactMap { try? decoder.decode(SessionHistoryEvent.self, from: Data($0.utf8)) }
+            .filter { $0.type == "summary" && !($0.payload["text"] ?? "").isEmpty }
+            .sorted { $0.timestamp < $1.timestamp }
+
+        guard let first = events.first else { return [] }
+        var selected = [first.payload["text"] ?? ""]
+        var lastSelectedAt = first.timestamp
+
+        for event in events.dropFirst() where event.timestamp.timeIntervalSince(lastSelectedAt) >= 4 * 60 {
+            let summary = event.payload["text"] ?? ""
+            if summary != selected.last {
+                selected.append(summary)
+            }
+            lastSelectedAt = event.timestamp
+        }
+
+        if let finalSummary = events.last?.payload["text"], finalSummary != selected.last {
+            selected.append(finalSummary)
+        }
+        return selected.filter { !$0.isEmpty }
+    }
+
     private static func section(in source: String, after heading: String, before nextHeading: String?) -> String {
         guard let headingRange = source.range(of: heading) else { return "" }
         let remainder = source[headingRange.upperBound...]
@@ -133,6 +205,60 @@ enum SessionHistoryStore {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         return formatter.date(from: name)
+    }
+}
+
+private struct SessionHistoryEvent: Decodable {
+    let timestamp: Date
+    let type: String
+    let payload: [String: String]
+}
+
+enum MeetingTitleFormatter {
+    static func format(topic: String) -> String? {
+        var normalized = topic
+            .split(whereSeparator: \Character.isNewline)
+            .map(String.init)
+            .joined(separator: " ")
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+            .trimmingCharacters(in: CharacterSet(charactersIn: " \t\n\r\"'「」『』【】#*・"))
+
+        for prefix in ["テーマ：", "テーマ:", "題名：", "題名:"] where normalized.hasPrefix(prefix) {
+            normalized.removeFirst(prefix.count)
+            normalized = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if normalized.hasSuffix("について") {
+            normalized.removeLast("について".count)
+        }
+        while let last = normalized.last, "。！？.!?".contains(last) {
+            normalized.removeLast()
+        }
+
+        var specificity = normalized
+        for genericWord in ["打ち合わせ", "会議", "内容", "要約", "作成", "方針"] {
+            specificity = specificity.replacingOccurrences(of: genericWord, with: "")
+        }
+        specificity = specificity
+            .replacingOccurrences(of: "について", with: "")
+            .replacingOccurrences(of: "に関する", with: "")
+            .replacingOccurrences(of: "の", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard normalized.count >= 4, specificity.count >= 2 else {
+            return nil
+        }
+
+        let actionWords = [
+            "改善", "見直し", "設計", "準備", "計画", "対応", "整理", "生成",
+            "導入", "移行", "公開", "運用", "方針", "検討", "更新", "実装", "統合", "廃止"
+        ]
+        var title = normalized
+        if !actionWords.contains(where: title.contains) {
+            title += "の検討"
+        }
+        let limit = 24
+        return title.count > limit ? String(title.prefix(limit)) : title
     }
 }
 

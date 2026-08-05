@@ -11,7 +11,7 @@
 
 ## インストール
 
-1. [Releases](https://github.com/minorun365/live-dictation/releases/latest)から`live-dictation-v1.2.0-macos-arm64.zip`をダウンロードします。
+1. [Releases](https://github.com/minorun365/live-dictation/releases/latest)から`live-dictation-v1.2.1-macos-arm64.zip`をダウンロードします。
 2. ZIPを展開し、`文字起こしくん.app`を「アプリケーション」フォルダへ移動します。
 3. 一度起動したあと、macOSの「システム設定」→「プライバシーとセキュリティ」→「このまま開く」を選びます。
 4. 起動後、マイクの利用を許可します。
@@ -20,7 +20,7 @@
 
 ## 使い方
 
-上部でモードを選び、「録音を開始」を押します。日本語モードは日本語文字起こしと要約、英語モードは英語文字起こし・日本語訳・要約を表示します。左の履歴から過去のセッションを選ぶと、保存済みの全文と要約を読み返せます。
+上部でモードを選び、「録音を開始」を押します。日本語モードは日本語文字起こしと要約、英語モードは英語文字起こし・日本語訳・要約を表示します。左の履歴には、会議全体から生成した短い日本語タイトルが新しい順に並びます。履歴を選ぶと、保存済みの全文と要約を読み返せます。
 
 保存先：`~/Library/Application Support/LiveTranslator/Sessions/`
 

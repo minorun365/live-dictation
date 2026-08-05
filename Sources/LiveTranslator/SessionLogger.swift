@@ -7,6 +7,7 @@ final class SessionLogger {
     private let transcriptURL: URL
     private let eventsURL: URL
     private let titleURL: URL
+    private let titleVersionURL: URL
     private let modeURL: URL
     private let mode: TranscriptionMode
     private var eventsHandle: FileHandle?
@@ -31,6 +32,7 @@ final class SessionLogger {
         transcriptURL = directoryURL.appendingPathComponent("transcript.md")
         eventsURL = directoryURL.appendingPathComponent("events.jsonl")
         titleURL = directoryURL.appendingPathComponent("title.txt")
+        titleVersionURL = directoryURL.appendingPathComponent("title-version.txt")
         modeURL = directoryURL.appendingPathComponent("mode.txt")
 
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -100,9 +102,16 @@ final class SessionLogger {
         appendEvent(type: "summary", payload: ["text": summary])
     }
 
-    func updateTitle(_ title: String) {
+    func updateTitle(_ title: String, version: Int? = nil) {
         do {
             try title.write(to: titleURL, atomically: true, encoding: .utf8)
+            if let version {
+                try String(version).write(
+                    to: titleVersionURL,
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
         } catch {
             // Recording must continue even if a single metadata write fails.
         }
