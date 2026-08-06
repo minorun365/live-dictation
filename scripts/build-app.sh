@@ -16,5 +16,9 @@ mkdir -p "${APP_DIR}/Contents/MacOS"
 cp "${BIN_DIR}/${EXECUTABLE_NAME}" "${APP_DIR}/Contents/MacOS/${BUNDLE_EXECUTABLE_NAME}"
 cp "${PROJECT_DIR}/Resources/Info.plist" "${APP_DIR}/Contents/Info.plist"
 
-codesign --force --sign - "${APP_DIR}"
+codesign \
+    --force \
+    --sign - \
+    --requirements '=designated => identifier "com.minorun365.LiveDictation"' \
+    "${APP_DIR}"
 echo "${APP_DIR}"
