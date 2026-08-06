@@ -30,10 +30,6 @@ struct ContentView: View {
     private var mainContent: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Circle()
-                    .fill(model.isRecording ? Color.red : Color.secondary.opacity(0.45))
-                    .frame(width: 9, height: 9)
-
                 Text(model.statusMessage)
                     .font(.callout)
                     .foregroundStyle(.secondary)

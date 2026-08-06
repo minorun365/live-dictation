@@ -41,4 +41,10 @@ open dist/文字起こしちゃん.app
 
 ## License
 
-[MIT License](LICENSE)
+Source code is licensed under the [MIT License](LICENSE).
+
+The application icon uses an illustration from いらすとや
+and is subject to the [いらすとや terms of use](https://www.irasutoya.com/p/terms.html).
+It is not licensed under the MIT License.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.
