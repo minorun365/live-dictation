@@ -1,8 +1,9 @@
+import CoreGraphics
 import Foundation
 
 @main
 struct SessionLoggerSelfTest {
-    static func main() throws {
+    static func main() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -24,6 +25,49 @@ struct SessionLoggerSelfTest {
             version: SessionHistoryStore.currentTitleVersion
         )
         logger.close()
+
+        let screenshotStartedAt = Date(timeIntervalSince1970: 100)
+        let screenshotStore = try ScreenshotSessionStore(
+            sessionDirectoryURL: logger.directoryURL,
+            startedAt: screenshotStartedAt
+        )
+        let darkImage = try makeSolidImage(gray: 0)
+        let lightImage = try makeSolidImage(gray: 255)
+        try await screenshotStore.save(darkImage, capturedAt: screenshotStartedAt)
+        try await screenshotStore.save(
+            darkImage,
+            capturedAt: screenshotStartedAt.addingTimeInterval(1)
+        )
+        try await screenshotStore.save(
+            lightImage,
+            capturedAt: screenshotStartedAt.addingTimeInterval(2)
+        )
+        try await screenshotStore.save(
+            darkImage,
+            capturedAt: screenshotStartedAt.addingTimeInterval(3)
+        )
+        try await screenshotStore.finish()
+
+        let screenshotsURL = logger.directoryURL.appendingPathComponent("screenshots")
+        let screenshotIndex = try String(
+            contentsOf: screenshotsURL.appendingPathComponent("index.jsonl"),
+            encoding: .utf8
+        )
+        let representativeIndex = try String(
+            contentsOf: screenshotsURL.appendingPathComponent("representatives.jsonl"),
+            encoding: .utf8
+        )
+        let timeline = try String(
+            contentsOf: screenshotsURL.appendingPathComponent("timeline.md"),
+            encoding: .utf8
+        )
+        guard screenshotIndex.split(separator: "\n").count == 4,
+              representativeIndex.split(separator: "\n").count == 3,
+              timeline.contains("00:00:00"),
+              timeline.contains("000003_0000002000ms.jpg"),
+              timeline.contains("000004_0000003000ms.jpg") else {
+            throw SelfTestError.invalidScreenshotLog
+        }
 
         let transcriptURL = logger.directoryURL.appendingPathComponent("transcript.md")
         let eventsURL = logger.directoryURL.appendingPathComponent("events.jsonl")
@@ -122,6 +166,28 @@ struct SessionLoggerSelfTest {
 
         print("SessionLogger self-test passed")
     }
+
+    private static func makeSolidImage(gray: UInt8) throws -> CGImage {
+        let width = 64
+        let height = 64
+        var pixels = [UInt8](repeating: gray, count: width * height)
+        let image = pixels.withUnsafeMutableBytes { buffer -> CGImage? in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else {
+                return nil
+            }
+            return context.makeImage()
+        }
+        guard let image else { throw SelfTestError.invalidScreenshotLog }
+        return image
+    }
 }
 
 private enum SelfTestError: Error {
@@ -135,4 +201,5 @@ private enum SelfTestError: Error {
     case invalidSavedSession
     case invalidTitleSource
     case invalidTitleUpgrade
+    case invalidScreenshotLog
 }

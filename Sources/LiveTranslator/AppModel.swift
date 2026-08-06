@@ -15,6 +15,7 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var sessionHistory: [SessionHistoryItem] = []
     @Published private(set) var selectedSessionID: String?
     @Published private(set) var selectedMode: TranscriptionMode = .japanese
+    @Published private(set) var isSavingScreenshots = false
     @Published private(set) var statusMessage = "録音を開始すると、日本語を文字起こしします"
     @Published private(set) var errorMessage: String?
 
@@ -52,6 +53,7 @@ final class AppModel: NSObject, ObservableObject {
     private var selectedSessionTranscript: SavedSessionTranscript?
     private var audioFile: AVAudioFile?
     private let captureBridge = AnalyzerCaptureBridge()
+    private let screenshotCaptureManager = ScreenshotCaptureManager()
 
     private let translationStream: AsyncStream<TranslationWork>
     private let translationContinuation: AsyncStream<TranslationWork>.Continuation
@@ -223,6 +225,9 @@ final class AppModel: NSObject, ObservableObject {
             return
         }
 
+        statusMessage = "保存する画面またはウィンドウを選択してください…"
+        let selectedScreenContent = await screenshotCaptureManager.selectContent()
+
         do {
             statusMessage = "\(activeMode.label)の音声認識を準備中…"
 
@@ -303,6 +308,39 @@ final class AppModel: NSObject, ObservableObject {
             )
             self.audioFile = audioFile
 
+            if let selectedScreenContent {
+                do {
+                    try screenshotCaptureManager.start(
+                        filter: selectedScreenContent.filter,
+                        sessionDirectoryURL: logger.directoryURL
+                    ) { [weak self] message in
+                        guard let self else { return }
+                        self.isSavingScreenshots = false
+                        self.logger?.appendEvent(
+                            type: "screen_capture_failed",
+                            payload: ["message": message]
+                        )
+                        if self.isRecording {
+                            self.statusMessage = self.recordingStatusMessage(for: self.activeMode)
+                        }
+                    }
+                    isSavingScreenshots = true
+                    logger.appendEvent(
+                        type: "screen_capture_started",
+                        payload: ["interval_seconds": "1"]
+                    )
+                } catch {
+                    isSavingScreenshots = false
+                    logger.appendEvent(
+                        type: "screen_capture_failed",
+                        payload: ["message": error.localizedDescription]
+                    )
+                }
+            } else {
+                isSavingScreenshots = false
+                logger.appendEvent(type: "screen_capture_skipped", payload: [:])
+            }
+
             captureBridge.configure(
                 audioFile: audioFile,
                 continuation: continuation,
@@ -346,6 +384,8 @@ final class AppModel: NSObject, ObservableObject {
         audioEngine.inputNode.removeTap(onBus: 0)
         inputContinuation?.finish()
         captureBridge.clear()
+        await screenshotCaptureManager.stop()
+        isSavingScreenshots = false
 
         do {
             try await analyzer?.finalizeAndFinishThroughEndOfInput()
@@ -538,6 +578,8 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func cleanUpAudio() async {
+        await screenshotCaptureManager.stop()
+        isSavingScreenshots = false
         if audioEngine.isRunning {
             audioEngine.stop()
         }
@@ -958,12 +1000,13 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func recordingStatusMessage(for mode: TranscriptionMode) -> String {
-        switch mode {
+        let message = switch mode {
         case .japanese:
             "日本語を文字起こし中"
         case .englishTranslation:
             "録音・翻訳中"
         }
+        return isSavingScreenshots ? "\(message)・画面を1秒ごとに保存中" : "\(message)（画面保存なし）"
     }
 }
 
