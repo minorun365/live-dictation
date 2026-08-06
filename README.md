@@ -1,4 +1,4 @@
-# 文字起こしくん
+# 文字起こしちゃん
 
 日本語の会議を文字起こし・要約するmacOSアプリです。英語を日本語へ翻訳するモードも備えています。Appleの音声認識・翻訳・生成モデルを使い、録音とログはMac内だけに保存します。
 
@@ -12,7 +12,7 @@
 ## インストール
 
 1. [Releases](https://github.com/minorun365/live-dictation/releases/latest)から`live-dictation-v1.2.1-macos-arm64.zip`をダウンロードします。
-2. ZIPを展開し、`文字起こしくん.app`を「アプリケーション」フォルダへ移動します。
+2. ZIPを展開し、`文字起こしちゃん.app`を「アプリケーション」フォルダへ移動します。
 3. 一度起動したあと、macOSの「システム設定」→「プライバシーとセキュリティ」→「このまま開く」を選びます。
 4. 起動後、マイクと画面収録の利用を許可します。画面収録の許可後にmacOSから再起動を求められた場合は、アプリを開き直します。
 
@@ -34,7 +34,7 @@ macOS 26.4 SDKとSwift 6.2以降が必要です。
 
 ```bash
 ./scripts/build-app.sh
-open dist/文字起こしくん.app
+open dist/文字起こしちゃん.app
 ```
 
 配布用ZIPは`./scripts/package-release.sh`で作成できます。

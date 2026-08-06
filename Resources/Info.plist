@@ -5,15 +5,15 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>ja</string>
     <key>CFBundleDisplayName</key>
-    <string>文字起こしくん</string>
+    <string>文字起こしちゃん</string>
     <key>CFBundleExecutable</key>
-    <string>LiveDictation</string>
+    <string>文字起こしちゃん</string>
     <key>CFBundleIdentifier</key>
     <string>com.minorun365.LiveDictation</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>文字起こしくん</string>
+    <string>文字起こしちゃん</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

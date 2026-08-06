@@ -57,7 +57,7 @@ final class SessionLogger {
 
     func updateTranscript(english: String, japanese: String, summary: String) {
         let markdown = """
-        # 文字起こしくん
+        # 文字起こしちゃん
 
         - Started: \(startedAt.ISO8601Format())
         - Updated: \(Date().ISO8601Format())

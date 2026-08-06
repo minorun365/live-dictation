@@ -15,7 +15,7 @@ struct LiveDictationApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .appTermination) {
-                Button("文字起こしくんを終了") {
+                Button("文字起こしちゃんを終了") {
                     model.stopRecordingIfNeeded()
                     NSApplication.shared.terminate(nil)
                 }

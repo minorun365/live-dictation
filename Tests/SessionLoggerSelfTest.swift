@@ -79,6 +79,7 @@ struct SessionLoggerSelfTest {
         let transcript = try String(contentsOf: transcriptURL, encoding: .utf8)
         guard transcript.contains("Hello"),
               transcript.contains("こんにちは"),
+              transcript.contains("# 文字起こしちゃん"),
               transcript.contains("直近の挨拶について話しています。") else {
             throw SelfTestError.invalidTranscript
         }

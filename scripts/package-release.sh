@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_PATH="${PROJECT_DIR}/dist/文字起こしくん.app"
+APP_PATH="${PROJECT_DIR}/dist/文字起こしちゃん.app"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${PROJECT_DIR}/Resources/Info.plist")"
 ARCHIVE_PATH="${PROJECT_DIR}/dist/live-dictation-v${VERSION}-macos-arm64.zip"
 
