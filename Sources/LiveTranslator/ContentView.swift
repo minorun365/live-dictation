@@ -95,7 +95,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .tint(model.isRecording ? .red : .accentColor)
+                .tint(model.isRecording ? .gray : .accentColor)
                 .accessibilityLabel(model.isRecording ? "録音を停止" : "録音を開始")
             }
             .padding(.horizontal, 22)
