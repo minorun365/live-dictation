@@ -1,46 +1,27 @@
-import AppKit
+import CoreGraphics
 import Foundation
 @preconcurrency import ScreenCaptureKit
 
-struct SelectedScreenContent: @unchecked Sendable {
-    let filter: SCContentFilter
-}
-
 @MainActor
-final class ScreenshotCaptureManager: NSObject {
-    private let picker = SCContentSharingPicker.shared
-    private var selectionContinuation: CheckedContinuation<SelectedScreenContent?, Never>?
+final class ScreenshotCaptureManager {
     private var captureTask: Task<Void, Never>?
     private var store: ScreenshotSessionStore?
 
-    func selectContent() async -> SelectedScreenContent? {
-        guard selectionContinuation == nil else { return nil }
-
-        var configuration = SCContentSharingPickerConfiguration()
-        configuration.allowedPickerModes = [.singleDisplay, .singleWindow]
-        configuration.allowsChangingSelectedContent = false
-        if let bundleIdentifier = Bundle.main.bundleIdentifier {
-            configuration.excludedBundleIDs = [bundleIdentifier]
-        }
-
-        picker.defaultConfiguration = configuration
-        picker.maximumStreamCount = 1
-        picker.add(self)
-        picker.isActive = true
-
-        return await withCheckedContinuation { continuation in
-            selectionContinuation = continuation
-            picker.present()
-        }
-    }
-
     func start(
-        filter: SCContentFilter,
         sessionDirectoryURL: URL,
         onFailure: @escaping @MainActor (String) -> Void
-    ) throws {
+    ) async throws {
         captureTask?.cancel()
 
+        let shareableContent = try await SCShareableContent.current
+        let mainDisplayID = CGMainDisplayID()
+        guard let mainDisplay = shareableContent.displays.first(where: {
+            $0.displayID == mainDisplayID
+        }) else {
+            throw ScreenshotCaptureError.mainDisplayUnavailable
+        }
+
+        let filter = SCContentFilter(display: mainDisplay, excludingWindows: [])
         let startedAt = Date()
         let store = try ScreenshotSessionStore(
             sessionDirectoryURL: sessionDirectoryURL,
@@ -91,33 +72,15 @@ final class ScreenshotCaptureManager: NSObject {
         self.captureTask = nil
         store = nil
     }
-
-    private func finishSelection(with filter: SCContentFilter?) {
-        guard let continuation = selectionContinuation else { return }
-        selectionContinuation = nil
-        picker.remove(self)
-        picker.isActive = false
-        continuation.resume(returning: filter.map(SelectedScreenContent.init))
-    }
 }
 
-extension ScreenshotCaptureManager: @preconcurrency SCContentSharingPickerObserver {
-    func contentSharingPicker(
-        _ picker: SCContentSharingPicker,
-        didCancelFor stream: SCStream?
-    ) {
-        finishSelection(with: nil)
-    }
+private enum ScreenshotCaptureError: LocalizedError {
+    case mainDisplayUnavailable
 
-    func contentSharingPicker(
-        _ picker: SCContentSharingPicker,
-        didUpdateWith filter: SCContentFilter,
-        for stream: SCStream?
-    ) {
-        finishSelection(with: filter)
-    }
-
-    func contentSharingPickerStartDidFailWithError(_ error: any Error) {
-        finishSelection(with: nil)
+    var errorDescription: String? {
+        switch self {
+        case .mainDisplayUnavailable:
+            "メイン画面を取得できません。"
+        }
     }
 }

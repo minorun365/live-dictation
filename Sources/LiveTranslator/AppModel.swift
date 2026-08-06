@@ -225,9 +225,6 @@ final class AppModel: NSObject, ObservableObject {
             return
         }
 
-        statusMessage = "保存する画面またはウィンドウを選択してください…"
-        let selectedScreenContent = await screenshotCaptureManager.selectContent()
-
         do {
             statusMessage = "\(activeMode.label)の音声認識を準備中…"
 
@@ -308,37 +305,35 @@ final class AppModel: NSObject, ObservableObject {
             )
             self.audioFile = audioFile
 
-            if let selectedScreenContent {
-                do {
-                    try screenshotCaptureManager.start(
-                        filter: selectedScreenContent.filter,
-                        sessionDirectoryURL: logger.directoryURL
-                    ) { [weak self] message in
-                        guard let self else { return }
-                        self.isSavingScreenshots = false
-                        self.logger?.appendEvent(
-                            type: "screen_capture_failed",
-                            payload: ["message": message]
-                        )
-                        if self.isRecording {
-                            self.statusMessage = self.recordingStatusMessage(for: self.activeMode)
-                        }
-                    }
-                    isSavingScreenshots = true
-                    logger.appendEvent(
-                        type: "screen_capture_started",
-                        payload: ["interval_seconds": "1"]
-                    )
-                } catch {
-                    isSavingScreenshots = false
-                    logger.appendEvent(
+            do {
+                statusMessage = "画面収録を準備中…"
+                try await screenshotCaptureManager.start(
+                    sessionDirectoryURL: logger.directoryURL
+                ) { [weak self] message in
+                    guard let self else { return }
+                    self.isSavingScreenshots = false
+                    self.logger?.appendEvent(
                         type: "screen_capture_failed",
-                        payload: ["message": error.localizedDescription]
+                        payload: ["message": message]
                     )
+                    if self.isRecording {
+                        self.statusMessage = self.recordingStatusMessage(for: self.activeMode)
+                    }
                 }
-            } else {
+                isSavingScreenshots = true
+                logger.appendEvent(
+                    type: "screen_capture_started",
+                    payload: [
+                        "interval_seconds": "1",
+                        "target": "main_display"
+                    ]
+                )
+            } catch {
                 isSavingScreenshots = false
-                logger.appendEvent(type: "screen_capture_skipped", payload: [:])
+                logger.appendEvent(
+                    type: "screen_capture_failed",
+                    payload: ["message": error.localizedDescription]
+                )
             }
 
             captureBridge.configure(
