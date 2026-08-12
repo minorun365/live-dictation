@@ -11,7 +11,7 @@
 
 ## インストール
 
-1. [Releases](https://github.com/minorun365/live-dictation/releases/latest)から`live-dictation-v1.2.1-macos-arm64.zip`をダウンロードします。
+1. [Releases](https://github.com/minorun365/live-dictation/releases/latest)から`live-dictation-v1.3.0-macos-arm64.zip`をダウンロードします。
 2. ZIPを展開し、`文字起こしちゃん.app`を「アプリケーション」フォルダへ移動します。
 3. 一度起動したあと、macOSの「システム設定」→「プライバシーとセキュリティ」→「このまま開く」を選びます。
 4. 起動後、マイクと画面収録の利用を許可します。画面収録の許可後にmacOSから再起動を求められた場合は、アプリを開き直します。
