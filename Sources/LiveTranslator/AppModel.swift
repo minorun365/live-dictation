@@ -19,7 +19,7 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var statusMessage = "録音を開始すると、日本語を文字起こしします"
     @Published private(set) var errorMessage: String?
 
-    private let audioEngine = AVAudioEngine()
+    private let meetingAudioCaptureManager = MeetingAudioCaptureManager()
     private var analyzer: SpeechAnalyzer?
     private var transcriber: SpeechTranscriber?
     private var analyzerTask: Task<Void, Never>?
@@ -51,8 +51,6 @@ final class AppModel: NSObject, ObservableObject {
 
     private var logger: SessionLogger?
     private var selectedSessionTranscript: SavedSessionTranscript?
-    private var audioFile: AVAudioFile?
-    private let captureBridge = AnalyzerCaptureBridge()
     private let screenshotCaptureManager = ScreenshotCaptureManager()
 
     private let translationStream: AsyncStream<TranslationWork>
@@ -262,11 +260,7 @@ final class AppModel: NSObject, ObservableObject {
                 options: .init(priority: .userInitiated, modelRetention: .processLifetime)
             )
 
-            let inputNode = audioEngine.inputNode
-            let sourceFormat = inputNode.outputFormat(forBus: 0)
-            guard sourceFormat.sampleRate > 0, sourceFormat.channelCount > 0 else {
-                throw AppError.microphoneUnavailable
-            }
+            let sourceFormat = meetingAudioCaptureManager.inputFormat
             guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
                 compatibleWith: modules,
                 considering: sourceFormat
@@ -299,12 +293,6 @@ final class AppModel: NSObject, ObservableObject {
 
             let logger = try SessionLogger(mode: activeMode)
             self.logger = logger
-            let audioFile = try AVAudioFile(
-                forWriting: logger.audioURL,
-                settings: sourceFormat.settings
-            )
-            self.audioFile = audioFile
-
             do {
                 statusMessage = "画面収録を準備中…"
                 try await screenshotCaptureManager.start(
@@ -336,15 +324,6 @@ final class AppModel: NSObject, ObservableObject {
                 )
             }
 
-            captureBridge.configure(
-                audioFile: audioFile,
-                continuation: continuation,
-                sourceFormat: sourceFormat,
-                analyzerFormat: analyzerFormat
-            )
-            inputNode.removeTap(onBus: 0)
-            captureBridge.installTap(on: inputNode, format: sourceFormat)
-
             self.transcriber = transcriber
             self.analyzer = analyzer
             inputContinuation = continuation
@@ -359,8 +338,31 @@ final class AppModel: NSObject, ObservableObject {
                 payload: ["recognizer": "apple-speech-analyzer"]
             )
 
-            audioEngine.prepare()
-            try audioEngine.start()
+            try await meetingAudioCaptureManager.start(
+                audioURL: logger.audioURL,
+                analyzerFormat: analyzerFormat,
+                continuation: continuation,
+                onSourceReady: { [weak self] source in
+                    self?.logger?.appendEvent(
+                        type: "meeting_audio_source_ready",
+                        payload: ["source": source]
+                    )
+                }
+            ) { [weak self] message in
+                guard let self else { return }
+                self.logger?.appendEvent(
+                    type: "meeting_audio_capture_failed",
+                    payload: ["message": message]
+                )
+                if self.isRecording {
+                    self.errorMessage = "会議音声の取得が停止しました: \(message)"
+                    self.statusMessage = "録音中（会議音声エラー）"
+                }
+            }
+            logger.appendEvent(
+                type: "meeting_audio_capture_started",
+                payload: ["sources": "microphone,system_audio"]
+            )
         } catch {
             await cleanUpAudio()
             isRecording = false
@@ -375,10 +377,8 @@ final class AppModel: NSObject, ObservableObject {
         isRecording = false
         summaryTask?.cancel()
         summaryTask = nil
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        await meetingAudioCaptureManager.stop()
         inputContinuation?.finish()
-        captureBridge.clear()
         await screenshotCaptureManager.stop()
         isSavingScreenshots = false
 
@@ -438,7 +438,6 @@ final class AppModel: NSObject, ObservableObject {
         resultsTask = nil
         summaryTask = nil
         inputContinuation = nil
-        audioFile = nil
         logger = nil
         reloadSessionHistory()
         scheduleTitleUpgrades()
@@ -575,12 +574,8 @@ final class AppModel: NSObject, ObservableObject {
     private func cleanUpAudio() async {
         await screenshotCaptureManager.stop()
         isSavingScreenshots = false
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
-        audioEngine.inputNode.removeTap(onBus: 0)
+        await meetingAudioCaptureManager.stop()
         inputContinuation?.finish()
-        captureBridge.clear()
         analyzerTask?.cancel()
         resultsTask?.cancel()
         summaryTask?.cancel()
@@ -591,7 +586,6 @@ final class AppModel: NSObject, ObservableObject {
         resultsTask = nil
         summaryTask = nil
         inputContinuation = nil
-        audioFile = nil
         logger?.close()
         logger = nil
     }
@@ -1017,113 +1011,13 @@ private struct TranslationWork: Sendable {
     let isFinal: Bool
 }
 
-private final class AnalyzerCaptureBridge: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: AsyncStream<AnalyzerInput>.Continuation?
-    private var converter: AVAudioConverter?
-    private var analyzerFormat: AVAudioFormat?
-    private var audioFile: AVAudioFile?
-
-    func configure(
-        audioFile: AVAudioFile,
-        continuation: AsyncStream<AnalyzerInput>.Continuation,
-        sourceFormat: AVAudioFormat,
-        analyzerFormat: AVAudioFormat
-    ) {
-        lock.withLock {
-            self.audioFile = audioFile
-            self.continuation = continuation
-            self.analyzerFormat = analyzerFormat
-            converter = AVAudioConverter(from: sourceFormat, to: analyzerFormat)
-        }
-    }
-
-    @inline(never)
-    func installTap(on inputNode: AVAudioInputNode, format: AVAudioFormat) {
-        inputNode.installTap(onBus: 0, bufferSize: 2_048, format: format) { [self] buffer, _ in
-            consume(buffer)
-        }
-    }
-
-    @inline(never)
-    private func consume(_ buffer: AVAudioPCMBuffer) {
-        lock.withLock {
-            try? audioFile?.write(from: buffer)
-            guard let continuation, let converter, let analyzerFormat else { return }
-            guard let converted = convert(
-                buffer,
-                using: converter,
-                to: analyzerFormat
-            ) else { return }
-            continuation.yield(AnalyzerInput(buffer: converted))
-        }
-    }
-
-    private func convert(
-        _ input: AVAudioPCMBuffer,
-        using converter: AVAudioConverter,
-        to outputFormat: AVAudioFormat
-    ) -> AVAudioPCMBuffer? {
-        let ratio = outputFormat.sampleRate / input.format.sampleRate
-        let capacity = AVAudioFrameCount((Double(input.frameLength) * ratio).rounded(.up)) + 1
-        guard let output = AVAudioPCMBuffer(
-            pcmFormat: outputFormat,
-            frameCapacity: capacity
-        ) else { return nil }
-
-        let inputProvider = ConverterInputProvider(input)
-        var conversionError: NSError?
-        let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
-            inputProvider.next(status: inputStatus)
-        }
-
-        guard status != .error, conversionError == nil, output.frameLength > 0 else {
-            return nil
-        }
-        return output
-    }
-
-    func clear() {
-        lock.withLock {
-            continuation = nil
-            converter = nil
-            analyzerFormat = nil
-            audioFile = nil
-        }
-    }
-}
-
-private final class ConverterInputProvider: @unchecked Sendable {
-    private let input: AVAudioPCMBuffer
-    private var supplied = false
-
-    init(_ input: AVAudioPCMBuffer) {
-        self.input = input
-    }
-
-    func next(
-        status: UnsafeMutablePointer<AVAudioConverterInputStatus>
-    ) -> AVAudioBuffer? {
-        if supplied {
-            status.pointee = .noDataNow
-            return nil
-        }
-        supplied = true
-        status.pointee = .haveData
-        return input
-    }
-}
-
 private enum AppError: LocalizedError {
-    case microphoneUnavailable
     case languageUnsupported(TranscriptionMode)
     case modelUnavailable(TranscriptionMode)
     case audioFormatUnavailable
 
     var errorDescription: String? {
         switch self {
-        case .microphoneUnavailable:
-            "マイクから音声を取得できません。"
         case .languageUnsupported(let mode):
             "\(mode.label)の長時間音声認識を利用できません。"
         case .modelUnavailable(let mode):
