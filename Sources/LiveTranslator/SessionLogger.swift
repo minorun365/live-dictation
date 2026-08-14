@@ -2,7 +2,11 @@ import Foundation
 
 final class SessionLogger {
     let directoryURL: URL
+    /// Used when both sides share one recognizer, as in English mode.
     let audioURL: URL
+    /// Used when the two sides are recognized separately, so each keeps its own file.
+    let microphoneAudioURL: URL
+    let systemAudioURL: URL
 
     private let transcriptURL: URL
     private let eventsURL: URL
@@ -29,6 +33,8 @@ final class SessionLogger {
 
         directoryURL = root.appendingPathComponent(formatter.string(from: now), isDirectory: true)
         audioURL = directoryURL.appendingPathComponent("audio.caf")
+        microphoneAudioURL = directoryURL.appendingPathComponent("audio-self.caf")
+        systemAudioURL = directoryURL.appendingPathComponent("audio-others.caf")
         transcriptURL = directoryURL.appendingPathComponent("transcript.md")
         eventsURL = directoryURL.appendingPathComponent("events.jsonl")
         titleURL = directoryURL.appendingPathComponent("title.txt")
@@ -84,11 +90,12 @@ final class SessionLogger {
         }
     }
 
-    func appendRecognition(text: String, isFinal: Bool) {
-        appendEvent(
-            type: "recognition",
-            payload: ["text": text, "final": String(isFinal)]
-        )
+    func appendRecognition(speaker: Speaker? = nil, text: String, isFinal: Bool) {
+        var payload = ["text": text, "final": String(isFinal)]
+        if let speaker {
+            payload["speaker"] = speaker.rawValue
+        }
+        appendEvent(type: "recognition", payload: payload)
     }
 
     func appendTranslation(source: String, target: String) {

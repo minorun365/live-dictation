@@ -20,13 +20,12 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private let meetingAudioCaptureManager = MeetingAudioCaptureManager()
-    private var analyzer: SpeechAnalyzer?
-    private var transcriber: SpeechTranscriber?
-    private var analyzerTask: Task<Void, Never>?
-    private var resultsTask: Task<Void, Never>?
+    /// Japanese mode runs one recognizer per speaker; English mode runs a single
+    /// recognizer over the mixed signal.
+    private var channels: [RecognitionChannel] = []
     private var summaryTask: Task<Void, Never>?
     private var titleUpgradeTask: Task<Void, Never>?
-    private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
+    private var speakerTranscript = SpeakerTranscript()
 
     private var finalizedEnglish = ""
     private var volatileEnglish = ""
@@ -232,48 +231,46 @@ final class AppModel: NSObject, ObservableObject {
                 throw AppError.languageUnsupported(activeMode)
             }
 
-            let transcriber = SpeechTranscriber(
-                locale: locale,
-                transcriptionOptions: [],
-                reportingOptions: [.volatileResults, .fastResults],
-                attributeOptions: [.audioTimeRange]
-            )
-            let modules: [any SpeechModule] = [transcriber]
+            let probeModules: [any SpeechModule] = [makeTranscriber(locale: locale)]
 
             let installedLocales = await SpeechTranscriber.installedLocales
             let modelIsInstalled = installedLocales.contains {
                 $0.language.languageCode == locale.language.languageCode
             }
             if !modelIsInstalled,
-               await AssetInventory.status(forModules: modules) != .installed {
+               await AssetInventory.status(forModules: probeModules) != .installed {
                 statusMessage = "\(activeMode.label)の音声認識モデルを取得中…"
                 guard let request = try await AssetInventory.assetInstallationRequest(
-                    supporting: modules
+                    supporting: probeModules
                 ) else {
                     throw AppError.modelUnavailable(activeMode)
                 }
                 try await request.downloadAndInstall()
             }
 
-            let analyzer = SpeechAnalyzer(
-                modules: modules,
-                options: .init(priority: .userInitiated, modelRetention: .processLifetime)
-            )
-
             let sourceFormat = meetingAudioCaptureManager.inputFormat
             guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
-                compatibleWith: modules,
+                compatibleWith: probeModules,
                 considering: sourceFormat
             ) else {
                 throw AppError.audioFormatUnavailable
             }
 
-            try await analyzer.prepareToAnalyze(in: analyzerFormat)
-
-            var continuation: AsyncStream<AnalyzerInput>.Continuation!
-            let inputStream = AsyncStream<AnalyzerInput>(bufferingPolicy: .bufferingNewest(64)) {
-                continuation = $0
+            // Japanese mode gives each side its own recognizer, which is what lets every
+            // phrase carry a speaker without having to tell the voices apart.
+            let speakers: [Speaker?] = activeMode == .japanese ? [.me, .others] : [nil]
+            var newChannels: [RecognitionChannel] = []
+            for speaker in speakers {
+                newChannels.append(
+                    try await makeChannel(
+                        speaker: speaker,
+                        locale: locale,
+                        analyzerFormat: analyzerFormat
+                    )
+                )
             }
+            // Held before anything else can fail, so cleanUpAudio() can tear them down.
+            channels = newChannels
 
             currentSessionID = UUID()
             finalizedEnglish = ""
@@ -284,6 +281,7 @@ final class AppModel: NSObject, ObservableObject {
             sessionTitleSummaries = []
             lastTitleSummaryCapturedAt = Date()
             recentSummaryWindow.removeAll()
+            speakerTranscript.removeAll()
             lastSummarizedSource = ""
             summaryText = ""
             volatileEnglish = ""
@@ -324,24 +322,29 @@ final class AppModel: NSObject, ObservableObject {
                 )
             }
 
-            self.transcriber = transcriber
-            self.analyzer = analyzer
-            inputContinuation = continuation
-            startResultTask(for: transcriber)
-            startAnalyzerTask(analyzer: analyzer, inputStream: inputStream)
+            for channel in newChannels {
+                startResultTask(for: channel)
+                startAnalyzerTask(for: channel)
+            }
 
             isRecording = true
             statusMessage = recordingStatusMessage(for: activeMode)
             startSummaryLoop()
             logger.appendEvent(
                 type: "session_started",
-                payload: ["recognizer": "apple-speech-analyzer"]
+                payload: [
+                    "recognizer": "apple-speech-analyzer",
+                    "recognizers": String(newChannels.count),
+                    "speaker_labels": String(newChannels.count > 1)
+                ]
             )
 
+            guard let routing = routing(for: newChannels, logger: logger) else {
+                throw AppError.audioFormatUnavailable
+            }
             try await meetingAudioCaptureManager.start(
-                audioURL: logger.audioURL,
                 analyzerFormat: analyzerFormat,
-                continuation: continuation,
+                routing: routing,
                 onSourceReady: { [weak self] source in
                     self?.logger?.appendEvent(
                         type: "meeting_audio_source_ready",
@@ -378,22 +381,28 @@ final class AppModel: NSObject, ObservableObject {
         summaryTask?.cancel()
         summaryTask = nil
         await meetingAudioCaptureManager.stop()
-        inputContinuation?.finish()
+        for channel in channels {
+            channel.continuation.finish()
+        }
         await screenshotCaptureManager.stop()
         isSavingScreenshots = false
 
-        do {
-            try await analyzer?.finalizeAndFinishThroughEndOfInput()
-        } catch {
-            logger?.appendEvent(
-                type: "recognizer_finalize_error",
-                payload: ["message": error.localizedDescription]
-            )
+        for channel in channels {
+            do {
+                try await channel.analyzer.finalizeAndFinishThroughEndOfInput()
+            } catch {
+                logger?.appendEvent(
+                    type: "recognizer_finalize_error",
+                    payload: ["message": error.localizedDescription]
+                )
+            }
         }
 
-        _ = await resultsTask?.result
-        analyzerTask?.cancel()
-        resultsTask?.cancel()
+        for channel in channels {
+            _ = await channel.resultsTask?.result
+            channel.analyzerTask?.cancel()
+            channel.resultsTask?.cancel()
+        }
 
         if activeMode == .englishTranslation, !volatileEnglish.isEmpty {
             let finalVolatileEnglish = volatileEnglish
@@ -401,10 +410,8 @@ final class AppModel: NSObject, ObservableObject {
             volatileEnglish = ""
             volatileJapanese = ""
             enqueueTranslation(sourceText: finalVolatileEnglish, isFinal: true)
-        } else if activeMode == .japanese, !volatileJapanese.isEmpty {
-            let finalVolatileJapanese = volatileJapanese
-            volatileJapanese = ""
-            commitFinalJapanese(finalVolatileJapanese)
+        } else if activeMode == .japanese {
+            commitPendingJapanese()
         }
 
         if activeMode == .englishTranslation {
@@ -427,32 +434,90 @@ final class AppModel: NSObject, ObservableObject {
         )
 
         englishText = finalizedEnglish
-        japaneseText = finalizedJapanese
+        japaneseText = sessionJapaneseText()
         updateSavedTranscript()
         logger?.appendEvent(type: "session_stopped", payload: [:])
         logger?.close()
 
-        analyzer = nil
-        transcriber = nil
-        analyzerTask = nil
-        resultsTask = nil
+        channels = []
         summaryTask = nil
-        inputContinuation = nil
         logger = nil
         reloadSessionHistory()
         scheduleTitleUpgrades()
         statusMessage = "停止しました。ログはMac内に保存済みです"
     }
 
-    private func startResultTask(for transcriber: SpeechTranscriber) {
-        resultsTask?.cancel()
-        resultsTask = Task { @MainActor [weak self] in
+    private func makeTranscriber(locale: Locale) -> SpeechTranscriber {
+        SpeechTranscriber(
+            locale: locale,
+            transcriptionOptions: [],
+            reportingOptions: [.volatileResults, .fastResults],
+            attributeOptions: [.audioTimeRange]
+        )
+    }
+
+    private func makeChannel(
+        speaker: Speaker?,
+        locale: Locale,
+        analyzerFormat: AVAudioFormat
+    ) async throws -> RecognitionChannel {
+        let transcriber = makeTranscriber(locale: locale)
+        let analyzer = SpeechAnalyzer(
+            modules: [transcriber],
+            options: .init(priority: .userInitiated, modelRetention: .processLifetime)
+        )
+        try await analyzer.prepareToAnalyze(in: analyzerFormat)
+
+        var continuation: AsyncStream<AnalyzerInput>.Continuation!
+        let inputStream = AsyncStream<AnalyzerInput>(bufferingPolicy: .bufferingNewest(64)) {
+            continuation = $0
+        }
+        return RecognitionChannel(
+            speaker: speaker,
+            analyzer: analyzer,
+            transcriber: transcriber,
+            continuation: continuation,
+            inputStream: inputStream
+        )
+    }
+
+    /// Each side is recorded from the same tap that feeds its recognizer, so the two
+    /// signals reach disk without ever being combined.
+    private func routing(
+        for channels: [RecognitionChannel],
+        logger: SessionLogger
+    ) -> MeetingAudioCaptureManager.Routing? {
+        if let microphone = channels.first(where: { $0.speaker == .me }),
+           let systemAudio = channels.first(where: { $0.speaker == .others }) {
+            return .separated(
+                microphone: .init(
+                    continuation: microphone.continuation,
+                    audioURL: logger.microphoneAudioURL
+                ),
+                systemAudio: .init(
+                    continuation: systemAudio.continuation,
+                    audioURL: logger.systemAudioURL
+                )
+            )
+        }
+        guard let single = channels.first else { return nil }
+        return .mixed(.init(continuation: single.continuation, audioURL: logger.audioURL))
+    }
+
+    private func startResultTask(for channel: RecognitionChannel) {
+        channel.resultsTask?.cancel()
+        channel.resultsTask = Task { @MainActor [weak self] in
             do {
-                for try await result in transcriber.results {
+                for try await result in channel.transcriber.results {
                     guard !Task.isCancelled else { return }
                     let text = String(result.text.characters)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
-                    self?.handleTranscription(text: text, isFinal: result.isFinal)
+                    self?.handleTranscription(
+                        speaker: channel.speaker,
+                        text: text,
+                        startSeconds: result.text.audioStartSeconds,
+                        isFinal: result.isFinal
+                    )
                 }
             } catch is CancellationError {
                 return
@@ -462,14 +527,11 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
-    private func startAnalyzerTask(
-        analyzer: SpeechAnalyzer,
-        inputStream: AsyncStream<AnalyzerInput>
-    ) {
-        analyzerTask?.cancel()
-        analyzerTask = Task { @MainActor [weak self] in
+    private func startAnalyzerTask(for channel: RecognitionChannel) {
+        channel.analyzerTask?.cancel()
+        channel.analyzerTask = Task { @MainActor [weak self] in
             do {
-                try await analyzer.start(inputSequence: inputStream)
+                try await channel.analyzer.start(inputSequence: channel.inputStream)
             } catch is CancellationError {
                 return
             } catch {
@@ -478,11 +540,21 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
-    private func handleTranscription(text: String, isFinal: Bool) {
-        guard analyzer != nil, !text.isEmpty else { return }
+    private func handleTranscription(
+        speaker: Speaker?,
+        text: String,
+        startSeconds: Double?,
+        isFinal: Bool
+    ) {
+        guard !channels.isEmpty, !text.isEmpty else { return }
 
         if activeMode == .japanese {
-            handleJapaneseTranscription(text: text, isFinal: isFinal)
+            handleJapaneseTranscription(
+                speaker: speaker ?? .me,
+                text: text,
+                startSeconds: startSeconds,
+                isFinal: isFinal
+            )
             return
         }
 
@@ -504,18 +576,37 @@ final class AppModel: NSObject, ObservableObject {
         updateSavedTranscript()
     }
 
-    private func handleJapaneseTranscription(text: String, isFinal: Bool) {
+    private func handleJapaneseTranscription(
+        speaker: Speaker,
+        text: String,
+        startSeconds: Double?,
+        isFinal: Bool
+    ) {
         if isFinal {
-            volatileJapanese = ""
-            commitFinalJapanese(text)
+            speakerTranscript.commit(speaker: speaker, text: text, startSeconds: startSeconds)
+            recentSummaryWindow.append("\(speaker.label)：\(text)")
         } else {
-            volatileJapanese = text
-            japaneseText = joinJapanese(finalizedJapanese, volatileJapanese)
+            speakerTranscript.setVolatile(speaker: speaker, text: text)
         }
 
-        logger?.appendRecognition(text: sessionJapaneseText(), isFinal: isFinal)
+        japaneseText = speakerTranscript.displayText
+        sessionFinalizedJapanese = speakerTranscript.finalizedText
+
+        logger?.appendRecognition(speaker: speaker, text: text, isFinal: isFinal)
         updateSavedTranscript()
         statusMessage = recordingStatusMessage(for: .japanese)
+    }
+
+    /// Phrases still being recognized when recording stops are kept rather than dropped.
+    private func commitPendingJapanese() {
+        for speaker in Speaker.allCases {
+            let pending = speakerTranscript.takeVolatile(for: speaker)
+            guard !pending.isEmpty else { continue }
+            speakerTranscript.commit(speaker: speaker, text: pending, startSeconds: nil)
+            recentSummaryWindow.append("\(speaker.label)：\(pending)")
+        }
+        japaneseText = speakerTranscript.displayText
+        sessionFinalizedJapanese = speakerTranscript.finalizedText
     }
 
     private func handleRecognitionFailure(_ error: any Error) {
@@ -575,17 +666,15 @@ final class AppModel: NSObject, ObservableObject {
         await screenshotCaptureManager.stop()
         isSavingScreenshots = false
         await meetingAudioCaptureManager.stop()
-        inputContinuation?.finish()
-        analyzerTask?.cancel()
-        resultsTask?.cancel()
+        for channel in channels {
+            channel.continuation.finish()
+            channel.analyzerTask?.cancel()
+            channel.resultsTask?.cancel()
+            await channel.analyzer.cancelAndFinishNow()
+        }
+        channels = []
         summaryTask?.cancel()
-        await analyzer?.cancelAndFinishNow()
-        analyzer = nil
-        transcriber = nil
-        analyzerTask = nil
-        resultsTask = nil
         summaryTask = nil
-        inputContinuation = nil
         logger?.close()
         logger = nil
     }
@@ -607,7 +696,10 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func sessionJapaneseText() -> String {
-        joinJapanese(sessionFinalizedJapanese, volatileJapanese)
+        if activeMode == .japanese {
+            return speakerTranscript.displayText
+        }
+        return joinJapanese(sessionFinalizedJapanese, volatileJapanese)
     }
 
     private func updateSavedTranscript() {
@@ -695,10 +787,13 @@ final class AppModel: NSObject, ObservableObject {
     private func summaryPrompt(for source: String) async throws -> Prompt? {
         var candidate = source
         let tokenBudget = Int(Double(summaryModel.contextSize) * 0.7)
+        let speakerNote = activeMode == .japanese
+            ? "行頭の「自分：」「相手：」は発言者を表します。"
+            : ""
 
         while candidate.count >= 40 {
             let prompt = Prompt("""
-            次は直近5分の日本語文字起こしです。重要な内容を簡潔に要約してください。
+            次は直近5分の日本語文字起こしです。\(speakerNote)重要な内容を簡潔に要約してください。
 
             出力形式:
             <overview>全体像を表す1〜2文</overview>
@@ -996,6 +1091,34 @@ final class AppModel: NSObject, ObservableObject {
             "録音・翻訳中"
         }
         return isSavingScreenshots ? "\(message)・画面を1秒ごとに保存中" : "\(message)（画面保存なし）"
+    }
+}
+
+/// One recognizer bound to one captured signal.
+@available(macOS 26.4, *)
+@MainActor
+private final class RecognitionChannel {
+    /// `nil` when a single recognizer covers the mixed signal, as in English mode.
+    let speaker: Speaker?
+    let analyzer: SpeechAnalyzer
+    let transcriber: SpeechTranscriber
+    let continuation: AsyncStream<AnalyzerInput>.Continuation
+    let inputStream: AsyncStream<AnalyzerInput>
+    var analyzerTask: Task<Void, Never>?
+    var resultsTask: Task<Void, Never>?
+
+    init(
+        speaker: Speaker?,
+        analyzer: SpeechAnalyzer,
+        transcriber: SpeechTranscriber,
+        continuation: AsyncStream<AnalyzerInput>.Continuation,
+        inputStream: AsyncStream<AnalyzerInput>
+    ) {
+        self.speaker = speaker
+        self.analyzer = analyzer
+        self.transcriber = transcriber
+        self.continuation = continuation
+        self.inputStream = inputStream
     }
 }
 
