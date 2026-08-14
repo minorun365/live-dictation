@@ -30,14 +30,23 @@ struct LiveDictationApp: App {
         MenuBarExtra {
             MenuBarContent(model: model)
         } label: {
-            // Kept plain on purpose — a status word rather than a coloured light.
-            if model.isRecording {
-                Label("録音中", systemImage: "waveform")
-            } else {
-                Image(systemName: "waveform")
+            // The app icon with its background removed, plus a status word rather than a
+            // coloured light while recording.
+            HStack(spacing: 4) {
+                Image(nsImage: Self.menuBarIcon)
+                if model.isRecording {
+                    Text("録音中")
+                }
             }
         }
     }
+
+    private static let menuBarIcon: NSImage = {
+        let image = NSImage(named: "MenuBarIcon")
+            ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "文字起こしちゃん")!
+        image.size = NSSize(width: 18, height: 18)
+        return image
+    }()
 }
 
 @available(macOS 26.4, *)
