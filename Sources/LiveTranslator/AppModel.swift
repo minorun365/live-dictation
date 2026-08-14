@@ -20,6 +20,10 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private let meetingAudioCaptureManager = MeetingAudioCaptureManager()
+    private let meetingDetector = MeetingDetector()
+    /// Whether the detector started the current recording. A recording started by hand
+    /// stays running even after the meeting app releases the microphone.
+    private var startedByDetector = false
     /// Japanese mode runs one recognizer per speaker; English mode runs a single
     /// recognizer over the mixed signal.
     private var channels: [RecognitionChannel] = []
@@ -64,6 +68,7 @@ final class AppModel: NSObject, ObservableObject {
         super.init()
         reloadSessionHistory()
         scheduleTitleUpgrades()
+        startMeetingDetection()
     }
 
     var displayedEnglishText: String {
@@ -106,9 +111,39 @@ final class AppModel: NSObject, ObservableObject {
 
     func toggleRecording() async {
         if isRecording {
+            startedByDetector = false
             await stopRecording()
         } else {
             await startRecording()
+        }
+    }
+
+    /// Records meetings without being asked: when a meeting app starts using the
+    /// microphone the recording begins, and it ends once that app lets go.
+    private func startMeetingDetection() {
+        meetingDetector.onChange = { [weak self] state in
+            Task { @MainActor in await self?.handleMeetingState(state) }
+        }
+        meetingDetector.start()
+    }
+
+    private func handleMeetingState(_ state: MeetingDetector.State) async {
+        switch state {
+        case .meeting:
+            guard !isRecording else { return }
+            startedByDetector = true
+            await startRecording()
+            // startRecording reports its own failures; only keep the flag if it worked,
+            // so a failed start cannot stop a later recording made by hand.
+            if !isRecording {
+                startedByDetector = false
+            }
+        case .idle:
+            // Leave recordings started by hand alone — the meeting app releasing the
+            // microphone says nothing about whether that recording is finished.
+            guard isRecording, startedByDetector else { return }
+            startedByDetector = false
+            await stopRecording()
         }
     }
 
