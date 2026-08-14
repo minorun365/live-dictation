@@ -32,9 +32,9 @@ final class SessionLogger {
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
 
         directoryURL = root.appendingPathComponent(formatter.string(from: now), isDirectory: true)
-        audioURL = directoryURL.appendingPathComponent("audio.caf")
-        microphoneAudioURL = directoryURL.appendingPathComponent("audio-self.caf")
-        systemAudioURL = directoryURL.appendingPathComponent("audio-others.caf")
+        audioURL = directoryURL.appendingPathComponent("audio.m4a")
+        microphoneAudioURL = directoryURL.appendingPathComponent("audio-self.m4a")
+        systemAudioURL = directoryURL.appendingPathComponent("audio-others.m4a")
         transcriptURL = directoryURL.appendingPathComponent("transcript.md")
         eventsURL = directoryURL.appendingPathComponent("events.jsonl")
         titleURL = directoryURL.appendingPathComponent("title.txt")

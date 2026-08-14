@@ -210,9 +210,24 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         )
     }
 
+    /// Recordings are stored as AAC. Uncompressed audio costs about 11MB per minute per
+    /// track, and Japanese mode writes two tracks, so an all-day recording would fill the
+    /// disk. AAC brings the same audio down to roughly 0.36MB per minute.
     private func configure(sink: RecordingSink, node: AVAudioNode, audioURL: URL) throws {
         let format = node.outputFormat(forBus: 0)
-        sink.configure(audioFile: try AVAudioFile(forWriting: audioURL, settings: format.settings))
+        let file = try AVAudioFile(forWriting: audioURL, settings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: format.sampleRate,
+            AVNumberOfChannelsKey: format.channelCount,
+            AVEncoderBitRateKey: 48_000 * Int(format.channelCount),
+        ])
+        // A compressed file rejects every buffer when its processing format differs from the
+        // tap, and RecordingSink discards those errors, which would leave an empty file
+        // behind. Settings copied from the tap keep the two in step, so verify it here.
+        guard file.processingFormat == format else {
+            throw MeetingAudioCaptureError.recordingFormatMismatch
+        }
+        sink.configure(audioFile: file)
     }
 
     /// A node carries at most one tap, so recording and recognition share one callback.
@@ -520,11 +535,14 @@ private final class MeetingAudioConverterInputProvider: @unchecked Sendable {
 
 private enum MeetingAudioCaptureError: LocalizedError {
     case mainDisplayUnavailable
+    case recordingFormatMismatch
 
     var errorDescription: String? {
         switch self {
         case .mainDisplayUnavailable:
             "メイン画面に紐づくシステム音声を取得できません。"
+        case .recordingFormatMismatch:
+            "録音ファイルの形式が音声入力と一致しないため、録音を開始できません。"
         }
     }
 }
