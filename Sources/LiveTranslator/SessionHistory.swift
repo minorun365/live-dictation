@@ -2,6 +2,7 @@ import Foundation
 
 enum TranscriptionMode: String, CaseIterable, Identifiable {
     case japanese
+    case inPerson
     case englishTranslation
 
     var id: String { rawValue }
@@ -9,16 +10,33 @@ enum TranscriptionMode: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .japanese: "日本語"
+        case .inPerson: "対面"
         case .englishTranslation: "英語→日本語"
         }
     }
 
     var localeIdentifier: String {
         switch self {
-        case .japanese: "ja-JP"
+        case .japanese, .inPerson: "ja-JP"
         case .englishTranslation: "en-US"
         }
     }
+
+    /// Whether the microphone and the system audio are recognized as separate speakers.
+    ///
+    /// The speaker is read from which input a phrase arrived on, not from the voice, so
+    /// this only works when the other side comes out of the speakers. People sitting in
+    /// the same room all land on the microphone, and labelling them "自分" would state
+    /// something untrue rather than merely unknown.
+    var separatesSpeakers: Bool { self == .japanese }
+
+    /// Whether transcription runs through the speaker-aware Japanese path. In-person
+    /// recordings take the same path but render without labels.
+    var usesSpeakerTranscript: Bool { self != .englishTranslation }
+
+    /// Whether the screen is recorded alongside the audio. In a meeting room the Mac's
+    /// own screen shows nothing worth keeping, and it costs about 22MB per minute.
+    var capturesScreen: Bool { self != .inPerson }
 }
 
 struct SessionHistoryItem: Identifiable, Hashable {

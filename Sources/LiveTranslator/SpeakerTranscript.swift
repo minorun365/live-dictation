@@ -43,6 +43,11 @@ struct TranscriptSegment: Equatable {
 /// Results arrive per speaker and out of order, so segments are placed by audio time
 /// rather than by the order the recognizers happen to report them.
 struct SpeakerTranscript {
+    /// In-person recordings put everyone on one microphone, so the speaker cannot be
+    /// observed. Labelling those phrases "自分" would be wrong rather than unknown, so
+    /// they are rendered without a label.
+    var labelsSpeakers = true
+
     private var segments: [TranscriptSegment] = []
     private var volatileText: [Speaker: String] = [:]
     private var lastKnownStart: Double = 0
@@ -129,7 +134,7 @@ struct SpeakerTranscript {
     private func render(lines: [SpeakerLine]) -> String {
         lines
             .filter { !$0.text.isEmpty }
-            .map { "\($0.speaker.label)：\($0.text)" }
+            .map { labelsSpeakers ? "\($0.speaker.label)：\($0.text)" : $0.text }
             .joined(separator: "\n")
     }
 }

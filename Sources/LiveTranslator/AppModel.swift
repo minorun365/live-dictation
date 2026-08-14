@@ -292,8 +292,15 @@ final class AppModel: NSObject, ObservableObject {
             }
 
             // Japanese mode gives each side its own recognizer, which is what lets every
-            // phrase carry a speaker without having to tell the voices apart.
-            let speakers: [Speaker?] = activeMode == .japanese ? [.me, .others] : [nil]
+            // phrase carry a speaker without having to tell the voices apart. In-person
+            // recordings have only the microphone to work with, so they run one recognizer
+            // and skip the labels.
+            let speakers: [Speaker?] = switch activeMode {
+            case .japanese: [.me, .others]
+            case .inPerson: [.me]
+            case .englishTranslation: [nil]
+            }
+            speakerTranscript.labelsSpeakers = activeMode.separatesSpeakers
             var newChannels: [RecognitionChannel] = []
             for speaker in speakers {
                 newChannels.append(
@@ -326,7 +333,14 @@ final class AppModel: NSObject, ObservableObject {
 
             let logger = try SessionLogger(mode: activeMode)
             self.logger = logger
-            do {
+            if !activeMode.capturesScreen {
+                isSavingScreenshots = false
+                logger.appendEvent(
+                    type: "screen_capture_skipped",
+                    payload: ["reason": "in_person_mode"]
+                )
+            } else {
+                do {
                 statusMessage = "画面収録を準備中…"
                 try await screenshotCaptureManager.start(
                     sessionDirectoryURL: logger.directoryURL
@@ -349,12 +363,13 @@ final class AppModel: NSObject, ObservableObject {
                         "target": "main_display"
                     ]
                 )
-            } catch {
-                isSavingScreenshots = false
-                logger.appendEvent(
-                    type: "screen_capture_failed",
-                    payload: ["message": error.localizedDescription]
-                )
+                } catch {
+                    isSavingScreenshots = false
+                    logger.appendEvent(
+                        type: "screen_capture_failed",
+                        payload: ["message": error.localizedDescription]
+                    )
+                }
             }
 
             for channel in newChannels {
@@ -445,7 +460,7 @@ final class AppModel: NSObject, ObservableObject {
             volatileEnglish = ""
             volatileJapanese = ""
             enqueueTranslation(sourceText: finalVolatileEnglish, isFinal: true)
-        } else if activeMode == .japanese {
+        } else if activeMode.usesSpeakerTranscript {
             commitPendingJapanese()
         }
 
@@ -583,7 +598,7 @@ final class AppModel: NSObject, ObservableObject {
     ) {
         guard !channels.isEmpty, !text.isEmpty else { return }
 
-        if activeMode == .japanese {
+        if activeMode.usesSpeakerTranscript {
             handleJapaneseTranscription(
                 speaker: speaker ?? .me,
                 text: text,
@@ -617,9 +632,12 @@ final class AppModel: NSObject, ObservableObject {
         startSeconds: Double?,
         isFinal: Bool
     ) {
+        // Without an observable speaker, the label is left off everywhere it would
+        // otherwise appear: the live view, the saved transcript, and the summary input.
+        let labelled = activeMode.separatesSpeakers
         if isFinal {
             speakerTranscript.commit(speaker: speaker, text: text, startSeconds: startSeconds)
-            recentSummaryWindow.append("\(speaker.label)：\(text)")
+            recentSummaryWindow.append(labelled ? "\(speaker.label)：\(text)" : text)
         } else {
             speakerTranscript.setVolatile(speaker: speaker, text: text)
         }
@@ -627,9 +645,13 @@ final class AppModel: NSObject, ObservableObject {
         japaneseText = speakerTranscript.displayText
         sessionFinalizedJapanese = speakerTranscript.finalizedText
 
-        logger?.appendRecognition(speaker: speaker, text: text, isFinal: isFinal)
+        logger?.appendRecognition(
+            speaker: labelled ? speaker : nil,
+            text: text,
+            isFinal: isFinal
+        )
         updateSavedTranscript()
-        statusMessage = recordingStatusMessage(for: .japanese)
+        statusMessage = recordingStatusMessage(for: activeMode)
     }
 
     /// Phrases still being recognized when recording stops are kept rather than dropped.
@@ -731,7 +753,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func sessionJapaneseText() -> String {
-        if activeMode == .japanese {
+        if activeMode.usesSpeakerTranscript {
             return speakerTranscript.displayText
         }
         return joinJapanese(sessionFinalizedJapanese, volatileJapanese)
@@ -822,7 +844,7 @@ final class AppModel: NSObject, ObservableObject {
     private func summaryPrompt(for source: String) async throws -> Prompt? {
         var candidate = source
         let tokenBudget = Int(Double(summaryModel.contextSize) * 0.7)
-        let speakerNote = activeMode == .japanese
+        let speakerNote = activeMode.separatesSpeakers
             ? "行頭の「自分：」「相手：」は発言者を表します。"
             : ""
 
@@ -1113,6 +1135,8 @@ final class AppModel: NSObject, ObservableObject {
         switch mode {
         case .japanese:
             "録音を開始すると、日本語を文字起こしします"
+        case .inPerson:
+            "同じ部屋での会話を、発言者を分けずに文字起こしします"
         case .englishTranslation:
             "録音を開始すると、英語を日本語へ翻訳します"
         }
@@ -1122,6 +1146,8 @@ final class AppModel: NSObject, ObservableObject {
         let message = switch mode {
         case .japanese:
             "日本語を文字起こし中"
+        case .inPerson:
+            "対面の会話を文字起こし中"
         case .englishTranslation:
             "録音・翻訳中"
         }

@@ -49,7 +49,7 @@ struct ContentView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(width: 210)
+                .frame(width: 280)
                 .disabled(model.isRecording)
 
                 Button("保存先を開く") {
@@ -200,7 +200,8 @@ struct TranscriptHistory: View {
                 TranscriptPane(title: "English", text: model.displayedEnglishText)
             }
             TranscriptPane(
-                title: model.displayedMode == .japanese ? "日本語文字起こし" : "日本語",
+                // 英語モードだけ「日本語」（＝翻訳結果）。日本語・対面は文字起こしそのもの。
+                title: model.displayedMode.usesSpeakerTranscript ? "日本語文字起こし" : "日本語",
                 text: model.displayedJapaneseText
             )
             TranscriptPane(title: "直近5分の要約", text: model.displayedSummaryText)
