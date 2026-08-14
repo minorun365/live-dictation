@@ -22,9 +22,9 @@ struct ContentView: View {
         .translationTask(translationConfiguration) { session in
             await model.runTranslationLoop(with: session)
         }
-        .onDisappear {
-            model.stopRecordingIfNeeded()
-        }
+        // Closing the window no longer stops the recording. A meeting can run long after
+        // the window is out of the way, and the app stays alive in the menu bar, so
+        // stopping here would cut recordings short. Quitting still stops it.
     }
 
     private var mainContent: some View {
