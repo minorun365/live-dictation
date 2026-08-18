@@ -24,6 +24,12 @@ final class AppModel: NSObject, ObservableObject {
     /// Whether the detector started the current recording. A recording started by hand
     /// stays running even after the meeting app releases the microphone.
     private var startedByDetector = false
+    /// A recording started by hand has no meeting app to end it, so it runs until
+    /// someone notices — filling the disk and, in the screen-capturing modes, leaving
+    /// the screen-recording indicator lit through whatever comes next. No meeting runs
+    /// this long, so cutting it here is the safe side to err on.
+    private let manualRecordingLimit: TimeInterval = 3 * 60 * 60
+    private var manualLimitTask: Task<Void, Never>?
     /// Japanese mode runs one recognizer per speaker; English mode runs a single
     /// recognizer over the mixed signal.
     private var channels: [RecognitionChannel] = []
@@ -394,6 +400,7 @@ final class AppModel: NSObject, ObservableObject {
 
             isRecording = true
             statusMessage = recordingStatusMessage(for: activeMode)
+            startManualLimitIfNeeded()
             startSummaryLoop()
             logger.appendEvent(
                 type: "session_started",
@@ -439,9 +446,37 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
+    /// Ends a hand-started recording after `manualRecordingLimit`. Recordings the
+    /// detector started are left alone: the meeting app releasing the microphone already
+    /// ends those.
+    private func startManualLimitIfNeeded() {
+        manualLimitTask?.cancel()
+        manualLimitTask = nil
+        guard !startedByDetector else { return }
+
+        let limit = manualRecordingLimit
+        manualLimitTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(limit))
+            guard !Task.isCancelled else { return }
+            await self?.stopAfterManualLimit()
+        }
+    }
+
+    private func stopAfterManualLimit() async {
+        guard isRecording else { return }
+        logger?.appendEvent(
+            type: "manual_recording_limit_reached",
+            payload: ["limit_hours": "3"]
+        )
+        await stopRecording()
+        statusMessage = "3時間が経過したため録音を停止しました。ログはMac内に保存済みです"
+    }
+
     private func stopRecording() async {
         guard isRecording else { return }
 
+        manualLimitTask?.cancel()
+        manualLimitTask = nil
         isRecording = false
         summaryTask?.cancel()
         summaryTask = nil

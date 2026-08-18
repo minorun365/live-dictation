@@ -57,7 +57,7 @@ private struct MenuBarContent: View {
 
         Divider()
 
-        Button(model.isRecording ? "録音を停止" : "録音を開始") {
+        Button(model.isRecording ? "録音を停止" : "手動で録音開始") {
             Task { await model.toggleRecording() }
         }
 

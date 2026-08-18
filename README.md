@@ -38,7 +38,7 @@ macOS 26.4以降のApple Silicon Mac。要約にApple Intelligenceを使いま�
 - 対象はZoom、Microsoft Teams、Webex、Slackのハドル、Discord
 - ブラウザーのGoogle Meetなどは、マイクと再生の両方を使っているときだけ会議とみなします
 - 音声入力アプリやmacOSの音声認識では始まりません
-- 「録音を開始」で自分から始めた録音は、自動では停止しません
+- 「手動で録音開始」で自分から始めた録音は、会議アプリの状態では停止しません。止め忘れに備えて3時間で自動停止します
 
 ## 保存されるもの
 
