@@ -51,12 +51,22 @@ private struct MenuBarContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Text(model.isRecording ? "録音中" : "待機中（会議を検知すると録音します）")
+        Text(model.isRecording
+             ? "録音中（\(model.currentMode.label)）"
+             : "待機中（会議を検知すると録音します）")
 
         Divider()
 
         Button(model.isRecording ? "録音を停止" : "録音を開始") {
             Task { await model.toggleRecording() }
+        }
+
+        // Meeting rooms are where the window is least likely to be open, so in-person
+        // recording gets its own entry rather than a mode to pick beforehand.
+        if !model.isRecording {
+            Button("対面会議を開始") {
+                Task { await model.startInPersonRecording() }
+            }
         }
 
         Button("ウィンドウを開く") {

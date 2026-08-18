@@ -39,7 +39,7 @@ struct ContentView: View {
                 Picker(
                     "文字起こしモード",
                     selection: Binding(
-                        get: { model.selectedMode },
+                        get: { model.currentMode },
                         set: { model.selectMode($0) }
                     )
                 ) {

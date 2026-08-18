@@ -87,6 +87,13 @@ final class AppModel: NSObject, ObservableObject {
         selectedSessionTranscript?.mode ?? (isRecording ? activeMode : selectedMode)
     }
 
+    /// The mode the current recording actually runs in. The menu bar can start an
+    /// in-person recording without touching the mode chosen in the window, so while
+    /// recording these two can differ.
+    var currentMode: TranscriptionMode {
+        isRecording ? activeMode : selectedMode
+    }
+
     func selectMode(_ mode: TranscriptionMode) {
         guard !isRecording else { return }
         selectedMode = mode
@@ -116,6 +123,14 @@ final class AppModel: NSObject, ObservableObject {
         } else {
             await startRecording()
         }
+    }
+
+    /// Starts an in-person recording straight from the menu bar, without opening the
+    /// window. The mode applies to this recording only: leaving `selectedMode` alone
+    /// keeps the next meeting the detector picks up on the speaker-aware Japanese path.
+    func startInPersonRecording() async {
+        guard !isRecording else { return }
+        await startRecording(mode: .inPerson)
     }
 
     /// Records meetings without being asked: when a meeting app starts using the
@@ -244,10 +259,10 @@ final class AppModel: NSObject, ObservableObject {
     }
     #endif
 
-    private func startRecording() async {
+    private func startRecording(mode: TranscriptionMode? = nil) async {
         errorMessage = nil
         showCurrentSession()
-        activeMode = selectedMode
+        activeMode = mode ?? selectedMode
         titleUpgradeTask?.cancel()
         titleUpgradeTask = nil
 
