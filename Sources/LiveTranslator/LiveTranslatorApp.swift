@@ -30,14 +30,10 @@ struct LiveDictationApp: App {
         MenuBarExtra {
             MenuBarContent(model: model)
         } label: {
-            // The app icon with its background removed, plus a status word rather than a
-            // coloured light while recording.
-            HStack(spacing: 4) {
-                Image(nsImage: Self.menuBarIcon)
-                if model.isRecording {
-                    Text("録音中")
-                }
-            }
+            // The icon never changes while recording. This app is used during customer
+            // calls with the screen shared, so the menu bar must not reveal that a
+            // recording is running. Do not add a label, dot, or colour change here.
+            Image(nsImage: Self.menuBarIcon)
         }
     }
 
