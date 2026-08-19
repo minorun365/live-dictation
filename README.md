@@ -8,7 +8,7 @@ macOS 26.4以降のApple Silicon Mac。要約にApple Intelligenceを使いま�
 
 ## インストール
 
-1. [Releases](https://github.com/minorun365/live-dictation/releases/latest)から`live-dictation-v1.4.0-macos-arm64.zip`をダウンロードします。
+1. [Releases](https://github.com/minorun365/live-dictation/releases/latest)から`live-dictation-v1.4.1-macos-arm64.zip`をダウンロードします。
 2. ZIPを展開し、`文字起こしちゃん.app`を「アプリケーション」フォルダへ移動します。
 3. 一度起動したあと、macOSの「システム設定」→「プライバシーとセキュリティ」→「このまま開く」を選びます。
 4. 起動後、マイクと画面収録の利用を許可します。再起動を求められたら、アプリを開き直します。

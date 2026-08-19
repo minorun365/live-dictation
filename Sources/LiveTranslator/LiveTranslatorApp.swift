@@ -44,11 +44,11 @@ struct LiveDictationApp: App {
         return image
     }()
 
-    // The portrait is taller than it is wide, so it is fitted to the 18pt menu bar
+    // The drawing is wider than it is tall, so it is fitted to the 18pt menu bar
     // height instead of being squeezed into a square.
     private static let recordingMenuBarIcon: NSImage = {
         guard let image = NSImage(named: "RecordingMenuBarIcon") else { return menuBarIcon }
-        image.size = NSSize(width: 13, height: 18)
+        image.size = NSSize(width: 24, height: 18)
         return image
     }()
 }
