@@ -30,25 +30,27 @@ struct LiveDictationApp: App {
         MenuBarExtra {
             MenuBarContent(model: model)
         } label: {
-            // Recording swaps the drawing for one that reads as decoration to anyone
-            // else. The app is used on shared screens during customer calls, so the
-            // menu bar still must not look like a recorder: no label, dot, or red tint.
+            // Idle shows someone asleep, recording shows someone taking notes. Both read
+            // as decoration to anyone else: the app is used on shared screens during
+            // customer calls, so the menu bar must not look like a recorder either way
+            // — no label, dot, or red tint.
             Image(nsImage: model.isRecording ? Self.recordingMenuBarIcon : Self.menuBarIcon)
         }
     }
 
+    // Idle: someone asleep under a duvet. The drawing is wider than it is tall, so it is
+    // fitted to the 18pt menu bar height instead of being squeezed into a square.
     private static let menuBarIcon: NSImage = {
         let image = NSImage(named: "MenuBarIcon")
             ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "文字起こしちゃん")!
-        image.size = NSSize(width: 18, height: 18)
+        image.size = NSSize(width: 24, height: 18)
         return image
     }()
 
-    // The drawing is wider than it is tall, so it is fitted to the 18pt menu bar
-    // height instead of being squeezed into a square.
+    // Recording: someone taking notes — the same drawing as the app icon.
     private static let recordingMenuBarIcon: NSImage = {
         guard let image = NSImage(named: "RecordingMenuBarIcon") else { return menuBarIcon }
-        image.size = NSSize(width: 24, height: 18)
+        image.size = NSSize(width: 18, height: 18)
         return image
     }()
 }
