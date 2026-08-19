@@ -30,10 +30,10 @@ struct LiveDictationApp: App {
         MenuBarExtra {
             MenuBarContent(model: model)
         } label: {
-            // The icon never changes while recording. This app is used during customer
-            // calls with the screen shared, so the menu bar must not reveal that a
-            // recording is running. Do not add a label, dot, or colour change here.
-            Image(nsImage: Self.menuBarIcon)
+            // Recording swaps the drawing for one that reads as decoration to anyone
+            // else. The app is used on shared screens during customer calls, so the
+            // menu bar still must not look like a recorder: no label, dot, or red tint.
+            Image(nsImage: model.isRecording ? Self.recordingMenuBarIcon : Self.menuBarIcon)
         }
     }
 
@@ -41,6 +41,14 @@ struct LiveDictationApp: App {
         let image = NSImage(named: "MenuBarIcon")
             ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "文字起こしちゃん")!
         image.size = NSSize(width: 18, height: 18)
+        return image
+    }()
+
+    // The portrait is taller than it is wide, so it is fitted to the 18pt menu bar
+    // height instead of being squeezed into a square.
+    private static let recordingMenuBarIcon: NSImage = {
+        guard let image = NSImage(named: "RecordingMenuBarIcon") else { return menuBarIcon }
+        image.size = NSSize(width: 13, height: 18)
         return image
     }()
 }

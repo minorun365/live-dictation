@@ -17,10 +17,12 @@ mkdir -p "${APP_DIR}/Contents/Resources"
 cp "${BIN_DIR}/${EXECUTABLE_NAME}" "${APP_DIR}/Contents/MacOS/${BUNDLE_EXECUTABLE_NAME}"
 cp "${PROJECT_DIR}/Resources/Info.plist" "${APP_DIR}/Contents/Info.plist"
 cp "${PROJECT_DIR}/Resources/AppIcon.icns" "${APP_DIR}/Contents/Resources/AppIcon.icns"
-# メニューバー用アイコン（アプリアイコンと同じ絵の背景を抜いたもの）。
+# メニューバー用アイコン（待機中はアプリと同じ絵の背景を抜いたもの、録音中は別の絵）。
 # NSImage(named:) がバンドルの Resources から読むので、@2x / @3x も一緒に入れる。
-for scale in "" "@2x" "@3x"; do
-    cp "${PROJECT_DIR}/Resources/MenuBarIcon${scale}.png" "${APP_DIR}/Contents/Resources/"
+for name in "MenuBarIcon" "RecordingMenuBarIcon"; do
+    for scale in "" "@2x" "@3x"; do
+        cp "${PROJECT_DIR}/Resources/${name}${scale}.png" "${APP_DIR}/Contents/Resources/"
+    done
 done
 
 codesign \
