@@ -9,6 +9,7 @@ mkdir -p "${MODULE_CACHE}"
 
 swiftc \
     -module-cache-path "${MODULE_CACHE}" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/SessionRegistry.swift" \
     "${PROJECT_DIR}/Sources/LiveTranslator/SessionLogger.swift" \
     "${PROJECT_DIR}/Sources/LiveTranslator/ScreenshotSessionStore.swift" \
     "${PROJECT_DIR}/Sources/LiveTranslator/SessionHistory.swift" \

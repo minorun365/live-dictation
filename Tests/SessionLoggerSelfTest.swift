@@ -1,6 +1,12 @@
 import CoreGraphics
 import Foundation
 
+private final class FakeRecordingSession {
+    let name: String
+    var isClosed = false
+    init(name: String) { self.name = name }
+}
+
 @main
 struct SessionLoggerSelfTest {
     static func main() async throws {
@@ -165,6 +171,33 @@ struct SessionLoggerSelfTest {
             throw SelfTestError.invalidTitleUpgrade
         }
 
+        let sessionRegistry = SessionRegistry<String, FakeRecordingSession>()
+        let firstSession = FakeRecordingSession(name: "first")
+        let secondSession = FakeRecordingSession(name: "second")
+
+        sessionRegistry.activate(firstSession, id: firstSession.name)
+        guard let finishingFirst = sessionRegistry.beginFinishingActive(),
+              finishingFirst.id == firstSession.name,
+              finishingFirst.session === firstSession else {
+            throw SelfTestError.invalidSessionIsolation
+        }
+
+        // This is the production race in miniature: while the first meeting is still
+        // finalizing, the next meeting becomes active. Completing the old work must
+        // close only the first session and leave the second one untouched.
+        sessionRegistry.activate(secondSession, id: secondSession.name)
+        finishingFirst.session.isClosed = true
+        sessionRegistry.finish(id: finishingFirst.id)
+
+        guard sessionRegistry.activeID == secondSession.name,
+              sessionRegistry.activeSession === secondSession,
+              sessionRegistry.session(for: firstSession.name) == nil,
+              sessionRegistry.session(for: secondSession.name) === secondSession,
+              firstSession.isClosed,
+              !secondSession.isClosed else {
+            throw SelfTestError.invalidSessionIsolation
+        }
+
         print("SessionLogger self-test passed")
     }
 
@@ -203,4 +236,5 @@ private enum SelfTestError: Error {
     case invalidTitleSource
     case invalidTitleUpgrade
     case invalidScreenshotLog
+    case invalidSessionIsolation
 }
