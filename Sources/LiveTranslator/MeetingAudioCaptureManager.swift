@@ -59,6 +59,8 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
     private let displaySleepBlocker = DisplaySleepBlocker()
     private var recoveryTask: Task<Void, Never>?
     private var isTearingDown = false
+    private var watchdogTask: Task<Void, Never>?
+    private var lastSampleAt: Date?
     private var reportedMicrophoneReady = false
     private var reportedSystemAudioReady = false
     private var attachedNodes: [AVAudioNode] = []
@@ -89,7 +91,8 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
 
         // キャプチャはメインディスプレイに紐づくので、画面が省電力で消えると
         // マイクごと停止する。録音している間だけ画面を起こしておく。
-        displaySleepBlocker.begin(reason: "文字起こしちゃんが録音しています")
+        displaySleepBlocker.begin(reason: "LiveDictation is capturing audio")
+        startWatchdog()
     }
 
     /// Wires the engine for the requested routing, then starts it.
@@ -230,10 +233,18 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
             // 張り直したソースが実際に音を届け始めたことを、ログで追えるようにする。
             reportedMicrophoneReady = false
             reportedSystemAudioReady = false
+            stateLock.withLock { lastSampleAt = nil }
 
             do {
                 try await startCapture()
             } catch {
+                continue
+            }
+
+            // 画面がロックされたままだと、張り直し自体は成功しても音が流れてこない。
+            // API が例外を投げなかったことを復帰の証拠にすると、無音のまま
+            // 「復帰した」と記録してしまい、欠落に気づけなくなる。
+            guard await waitForSamples() else {
                 continue
             }
 
@@ -254,6 +265,57 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         stateLock.withLock { recoveryTask = nil }
     }
 
+    /// ストリームは `didStopWithError` を出さずに、静かにサンプルを止めることがある。
+    /// エラーを待っていると録音の最後まで無音に気づけないので、
+    /// 「届かなくなったこと」自体を定期的に確かめる。
+    private func startWatchdog() {
+        let task = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.watchdogInterval))
+                guard let self, !Task.isCancelled else { return }
+                if self.stateLock.withLock({ self.isTearingDown }) { return }
+
+                let gap = self.stateLock.withLock { () -> TimeInterval? in
+                    guard let last = self.lastSampleAt else { return nil }
+                    return Date().timeIntervalSince(last)
+                }
+                guard let gap, gap > Self.sampleGapTolerance else { continue }
+
+                // 復帰を待つ間に何度も通知しないよう、印を落としてから知らせる。
+                self.stateLock.withLock { self.lastSampleAt = nil }
+                self.report(failure: "音声が届かなくなりました")
+                self.beginRecovery()
+            }
+        }
+        stateLock.withLock { watchdogTask = task }
+    }
+
+    /// 張り直したストリームから実際に音が届くまで待つ。届かなければ復帰は失敗扱い。
+    private func waitForSamples() async -> Bool {
+        for _ in 0..<Self.sampleWaitPolls {
+            try? await Task.sleep(for: .milliseconds(Self.sampleWaitInterval))
+            if Task.isCancelled { return false }
+            if stateLock.withLock({ lastSampleAt != nil }) { return true }
+        }
+        return false
+    }
+
+    private func noteSampleArrived() {
+        stateLock.withLock { lastSampleAt = Date() }
+    }
+
+    private func report(failure message: String) {
+        guard let runtimeFailureHandler else { return }
+        Task { @MainActor in
+            runtimeFailureHandler(message)
+        }
+    }
+
+    private static let watchdogInterval = 5
+    /// 会議中の沈黙でもサンプル自体は届き続けるので、8秒途絶えたら異常とみなす。
+    private static let sampleGapTolerance: TimeInterval = 8
+    private static let sampleWaitPolls = 10
+    private static let sampleWaitInterval = 500
     private static let rapidRecoveryAttempts = 5
     private static let rapidRecoveryInterval = 3
     private static let slowRecoveryInterval = 15
@@ -312,13 +374,18 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
     }
 
     func stop() async {
-        let pendingRecovery = stateLock.withLock { () -> Task<Void, Never>? in
+        let (pendingRecovery, pendingWatchdog) = stateLock.withLock {
+            () -> (Task<Void, Never>?, Task<Void, Never>?) in
             isTearingDown = true
-            let task = recoveryTask
+            let recovery = recoveryTask
+            let watchdog = watchdogTask
             recoveryTask = nil
-            return task
+            watchdogTask = nil
+            lastSampleAt = nil
+            return (recovery, watchdog)
         }
         pendingRecovery?.cancel()
+        pendingWatchdog?.cancel()
         displaySleepBlocker.end()
 
         if let stream {
@@ -373,9 +440,11 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         switch type {
         case .microphone:
             microphonePlayer.scheduleBuffer(converted)
+            noteSampleArrived()
             reportSourceReadyIfNeeded(type: type)
         case .audio:
             systemAudioPlayer.scheduleBuffer(converted)
+            noteSampleArrived()
             reportSourceReadyIfNeeded(type: type)
         default:
             break
@@ -503,11 +572,7 @@ extension MeetingAudioCaptureManager: SCStreamOutput {
 
 extension MeetingAudioCaptureManager: SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: any Error) {
-        if let runtimeFailureHandler {
-            Task { @MainActor in
-                runtimeFailureHandler(error.localizedDescription)
-            }
-        }
+        report(failure: error.localizedDescription)
         beginRecovery()
     }
 }
