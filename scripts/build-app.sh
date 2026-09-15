@@ -9,7 +9,25 @@ BUILD_DIR="${PROJECT_DIR}/dist"
 APP_DIR="${BUILD_DIR}/${APP_NAME}.app"
 
 cd "${PROJECT_DIR}"
-swift build -c release --product "${EXECUTABLE_NAME}"
+
+# SwiftUIのマクロ（@Stateなど）を展開するプラグインは、Command Line Toolsには入っておらず
+# Xcodeの中にしかない。xcode-selectがCommand Line Toolsを指していると、ここで
+# 「plugin for module 'SwiftUIMacros' not found」でビルドが落ちる。Xcodeが手元にあるなら
+# そのプラグインを直接渡して通す。`sudo xcode-select -s /Applications/Xcode.app` を
+# 済ませてある環境では、この分岐は空のまま通過する。
+BUILD_FLAGS=()
+if [ ! -f "$(xcrun --show-sdk-platform-path 2>/dev/null)/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib" ]; then
+    for candidate in \
+        "$(xcode-select -p)/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins" \
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins"; do
+        if [ -f "${candidate}/libSwiftUIMacros.dylib" ]; then
+            BUILD_FLAGS=(-Xswiftc -plugin-path -Xswiftc "${candidate}")
+            break
+        fi
+    done
+fi
+
+swift build -c release --product "${EXECUTABLE_NAME}" "${BUILD_FLAGS[@]}"
 BIN_DIR="$(swift build -c release --show-bin-path)"
 
 mkdir -p "${APP_DIR}/Contents/MacOS"

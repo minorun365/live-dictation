@@ -55,6 +55,10 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
     private var systemSourceFormat: AVAudioFormat?
     private var runtimeFailureHandler: (@MainActor @Sendable (String) -> Void)?
     private var sourceReadyHandler: (@MainActor @Sendable (String) -> Void)?
+    private var recoveryHandler: (@MainActor @Sendable (Int) -> Void)?
+    private let displaySleepBlocker = DisplaySleepBlocker()
+    private var recoveryTask: Task<Void, Never>?
+    private var isTearingDown = false
     private var reportedMicrophoneReady = false
     private var reportedSystemAudioReady = false
     private var attachedNodes: [AVAudioNode] = []
@@ -66,10 +70,13 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         analyzerFormat: AVAudioFormat,
         routing: Routing,
         onSourceReady: @escaping @MainActor @Sendable (String) -> Void,
+        onRecovered: @escaping @MainActor @Sendable (Int) -> Void,
         onRuntimeFailure: @escaping @MainActor @Sendable (String) -> Void
     ) async throws {
         await stop()
+        stateLock.withLock { isTearingDown = false }
         sourceReadyHandler = onSourceReady
+        recoveryHandler = onRecovered
         runtimeFailureHandler = onRuntimeFailure
 
         do {
@@ -79,6 +86,10 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
             await stop()
             throw error
         }
+
+        // キャプチャはメインディスプレイに紐づくので、画面が省電力で消えると
+        // マイクごと停止する。録音している間だけ画面を起こしておく。
+        displaySleepBlocker.begin(reason: "文字起こしちゃんが録音しています")
     }
 
     /// Wires the engine for the requested routing, then starts it.
@@ -189,6 +200,66 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         try await stream.startCapture()
     }
 
+    /// ストリームが落ちても、音声エンジンと認識器は動いたままになる。放っておくと
+    /// 無音を書き続け、録音が終わるまで気づけない。画面ロックのように一時的な理由なら
+    /// 元に戻るので、戻るまで張り直しを試みる。
+    private func beginRecovery() {
+        stateLock.withLock {
+            guard !isTearingDown, recoveryTask == nil else { return }
+            recoveryTask = Task { [weak self] in
+                await self?.recoverCapture()
+            }
+        }
+    }
+
+    /// 最初の数回は短い間隔で、その後は間隔を空けて粘る。画面が消えている間は
+    /// 対象のディスプレイ自体が見つからないので、何度でも失敗する前提で書く。
+    private func recoverCapture() async {
+        for attempt in 1...Self.recoveryAttemptLimit {
+            let interval = attempt <= Self.rapidRecoveryAttempts
+                ? Self.rapidRecoveryInterval
+                : Self.slowRecoveryInterval
+            try? await Task.sleep(for: .seconds(interval))
+            if Task.isCancelled { return }
+            if stateLock.withLock({ isTearingDown }) { return }
+
+            if let previous = stream {
+                try? await previous.stopCapture()
+                stream = nil
+            }
+            // 張り直したソースが実際に音を届け始めたことを、ログで追えるようにする。
+            reportedMicrophoneReady = false
+            reportedSystemAudioReady = false
+
+            do {
+                try await startCapture()
+            } catch {
+                continue
+            }
+
+            if let recoveryHandler {
+                Task { @MainActor in
+                    recoveryHandler(attempt)
+                }
+            }
+            stateLock.withLock { recoveryTask = nil }
+            return
+        }
+
+        if let runtimeFailureHandler {
+            Task { @MainActor in
+                runtimeFailureHandler("画面が戻らないため、会議音声を再開できませんでした")
+            }
+        }
+        stateLock.withLock { recoveryTask = nil }
+    }
+
+    private static let rapidRecoveryAttempts = 5
+    private static let rapidRecoveryInterval = 3
+    private static let slowRecoveryInterval = 15
+    /// 約2時間ぶん。これを超えて画面が戻らないなら、録音を続ける意味がない。
+    private static let recoveryAttemptLimit = 480
+
     private func attach(_ node: AVAudioNode) {
         audioEngine.attach(node)
         attachedNodes.append(node)
@@ -241,6 +312,15 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
     }
 
     func stop() async {
+        let pendingRecovery = stateLock.withLock { () -> Task<Void, Never>? in
+            isTearingDown = true
+            let task = recoveryTask
+            recoveryTask = nil
+            return task
+        }
+        pendingRecovery?.cancel()
+        displaySleepBlocker.end()
+
         if let stream {
             try? await stream.stopCapture()
         }
@@ -278,6 +358,7 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         }
         runtimeFailureHandler = nil
         sourceReadyHandler = nil
+        recoveryHandler = nil
         reportedMicrophoneReady = false
         reportedSystemAudioReady = false
     }
@@ -422,10 +503,12 @@ extension MeetingAudioCaptureManager: SCStreamOutput {
 
 extension MeetingAudioCaptureManager: SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: any Error) {
-        guard let runtimeFailureHandler else { return }
-        Task { @MainActor in
-            runtimeFailureHandler(error.localizedDescription)
+        if let runtimeFailureHandler {
+            Task { @MainActor in
+                runtimeFailureHandler(error.localizedDescription)
+            }
         }
+        beginRecovery()
     }
 }
 

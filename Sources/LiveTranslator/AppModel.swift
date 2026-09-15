@@ -442,6 +442,16 @@ final class AppModel: NSObject, ObservableObject {
                         type: "meeting_audio_source_ready",
                         payload: ["source": source]
                     )
+                },
+                onRecovered: { [weak self] attempt in
+                    recordingSession.logger.appendEvent(
+                        type: "meeting_audio_capture_recovered",
+                        payload: ["attempt": String(attempt)]
+                    )
+                    guard let self,
+                          self.sessionRegistry.isActive(id: recordingSession.id) else { return }
+                    self.errorMessage = nil
+                    self.statusMessage = self.recordingStatusMessage(for: recordingMode)
                 }
             ) { [weak self] message in
                 guard let self else { return }
