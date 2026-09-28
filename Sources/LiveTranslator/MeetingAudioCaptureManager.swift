@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 import CoreMedia
 import Foundation
 import Speech
@@ -60,6 +61,10 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
     private var recoveryTask: Task<Void, Never>?
     private var isTearingDown = false
     private var watchdogTask: Task<Void, Never>?
+    /// Set when the Mac wakes or the screen unlocks, to cut the wait before the next
+    /// reconnection attempt short.
+    private var retryRequested = false
+    private var wakeObservers: [(NotificationCenter, NSObjectProtocol)] = []
     private var lastSampleAt: Date?
     private var reportedMicrophoneReady = false
     private var reportedSystemAudioReady = false
@@ -93,6 +98,66 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         // マイクごと停止する。録音している間だけ画面を起こしておく。
         displaySleepBlocker.begin(reason: "LiveDictation is capturing audio")
         startWatchdog()
+        startWakeObservers()
+    }
+
+    /// Closing the lid cuts the microphone in hardware and takes the display away, so
+    /// capture always breaks while the lid is shut. What matters is how quickly it comes
+    /// back once the lid opens: the capture needs an unlocked screen, and the slow retry
+    /// interval could otherwise leave the first quarter-minute of the meeting unheard.
+    /// Waking and unlocking both ask for an immediate attempt.
+    private func startWakeObservers() {
+        removeWakeObservers()
+        let request: @Sendable (Notification) -> Void = { [weak self] _ in
+            self?.requestImmediateRetry()
+        }
+        let workspace = NSWorkspace.shared.notificationCenter
+        let distributed = DistributedNotificationCenter.default()
+        var observers: [(NotificationCenter, NSObjectProtocol)] = []
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            observers.append((workspace, workspace.addObserver(forName: name, object: nil, queue: nil, using: request)))
+        }
+        observers.append((
+            distributed,
+            distributed.addObserver(
+                forName: Notification.Name("com.apple.screenIsUnlocked"),
+                object: nil,
+                queue: nil,
+                using: request
+            )
+        ))
+        stateLock.withLock { wakeObservers = observers }
+    }
+
+    private func removeWakeObservers() {
+        let observers = stateLock.withLock { () -> [(NotificationCenter, NSObjectProtocol)] in
+            let current = wakeObservers
+            wakeObservers = []
+            return current
+        }
+        for (center, observer) in observers {
+            center.removeObserver(observer)
+        }
+    }
+
+    private func requestImmediateRetry() {
+        stateLock.withLock { retryRequested = true }
+    }
+
+    /// Waits for the retry interval, returning early when a wake or unlock asked for
+    /// an attempt right away.
+    private func waitBeforeRetry(seconds: Int) async {
+        let deadline = Date().addingTimeInterval(TimeInterval(seconds))
+        while Date() < deadline {
+            if Task.isCancelled { return }
+            let requested = stateLock.withLock { () -> Bool in
+                let value = retryRequested
+                retryRequested = false
+                return value
+            }
+            if requested { return }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
     }
 
     /// Wires the engine for the requested routing, then starts it.
@@ -222,7 +287,7 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
             let interval = attempt <= Self.rapidRecoveryAttempts
                 ? Self.rapidRecoveryInterval
                 : Self.slowRecoveryInterval
-            try? await Task.sleep(for: .seconds(interval))
+            await waitBeforeRetry(seconds: interval)
             if Task.isCancelled { return }
             if stateLock.withLock({ isTearingDown }) { return }
 
@@ -386,6 +451,7 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         }
         pendingRecovery?.cancel()
         pendingWatchdog?.cancel()
+        removeWakeObservers()
         displaySleepBlocker.end()
 
         if let stream {

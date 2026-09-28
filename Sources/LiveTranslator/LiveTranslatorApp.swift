@@ -65,6 +65,10 @@ private struct MenuBarContent: View {
              ? "録音中（\(model.currentMode.label)）"
              : "待機中（会議を検知すると録音します）")
 
+        if let warning = model.inPersonFeedWarning {
+            Text(warning)
+        }
+
         Divider()
 
         Button(model.isRecording ? "録音を停止" : "手動で録音開始") {

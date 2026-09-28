@@ -8,7 +8,14 @@ import Speech
 @MainActor
 @available(macOS 26.4, *)
 final class AppModel: NSObject, ObservableObject {
-    @Published private(set) var isRecording = false
+    @Published private(set) var isRecording = false {
+        didSet {
+            guard isRecording != oldValue else { return }
+            inPersonReminder?.recordingStateChanged()
+        }
+    }
+    /// Set when the in-person meeting list has stopped refreshing. Shown in the menu.
+    @Published private(set) var inPersonFeedWarning: String?
     @Published private(set) var englishText = ""
     @Published private(set) var japaneseText = ""
     @Published private(set) var summaryText = ""
@@ -21,6 +28,8 @@ final class AppModel: NSObject, ObservableObject {
 
     private let meetingAudioCaptureManager = MeetingAudioCaptureManager()
     private let meetingDetector = MeetingDetector()
+    /// Reminds before meetings held in a room, which the detector cannot see.
+    private var inPersonReminder: InPersonReminder?
     /// Whether the detector started the current recording. A recording started by hand
     /// stays running even after the meeting app releases the microphone.
     private var startedByDetector = false
@@ -58,6 +67,20 @@ final class AppModel: NSObject, ObservableObject {
         reloadSessionHistory()
         scheduleTitleUpgrades()
         startMeetingDetection()
+        startInPersonReminders()
+    }
+
+    private func startInPersonReminders() {
+        let reminder = InPersonReminder(
+            isRecording: { [weak self] in self?.isRecording ?? false },
+            startInPersonRecording: { [weak self] in await self?.startInPersonRecording() }
+        )
+        reminder.onFeedWarningChange = { [weak self] warning in
+            self?.inPersonFeedWarning = warning
+        }
+        inPersonReminder = reminder
+        reminder.start()
+        inPersonFeedWarning = reminder.feedWarning
     }
 
     var displayedEnglishText: String {

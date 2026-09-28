@@ -19,3 +19,12 @@ swiftc \
     -o "${TEST_BINARY}"
 
 "${TEST_BINARY}"
+
+SCHEDULE_TEST_BINARY="${TMPDIR:-/tmp}/live-dictation-in-person-schedule-test"
+swiftc \
+    -module-cache-path "${MODULE_CACHE}" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/InPersonSchedule.swift" \
+    "${PROJECT_DIR}/Tests/InPersonScheduleSelfTest.swift" \
+    -o "${SCHEDULE_TEST_BINARY}"
+
+"${SCHEDULE_TEST_BINARY}"
