@@ -38,12 +38,12 @@ struct LiveDictationApp: App {
         }
     }
 
-    // Idle: someone asleep under a duvet. The drawing is wider than it is tall, so it is
-    // fitted to the 18pt menu bar height instead of being squeezed into a square.
+    // Idle: someone who dozed off over a book. The drawing is roughly square, so it
+    // sits in the same 18pt square as the recording icon.
     private static let menuBarIcon: NSImage = {
         let image = NSImage(named: "MenuBarIcon")
             ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "文字起こしちゃん")!
-        image.size = NSSize(width: 24, height: 18)
+        image.size = NSSize(width: 18, height: 18)
         return image
     }()
 
