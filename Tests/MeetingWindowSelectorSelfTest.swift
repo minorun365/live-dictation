@@ -44,6 +44,20 @@ struct MeetingWindowSelectorSelfTest {
         // Overlay layers such as menus are ignored.
         check(MeetingWindowSelector.pick(from: [window(8, "com.google.Chrome", "Meet - x", layer: 25)], meetingBundleID: nil) == nil,
               "通常レイヤー以外は選ばない")
+        // Teams titles the call window after the meeting subject, so the detected app's
+        // newest non-main window is used.
+        let teamsMain = window(20, "com.microsoft.teams2", "チャット | 木村さん | Microsoft Teams", width: 2_000)
+        let teamsCall = window(31, "com.microsoft.teams2", "Co-pilot課題の集中ヒアリング | Microsoft Teams")
+        check(MeetingWindowSelector.pick(from: [teamsMain, teamsCall, slack], meetingBundleID: "com.microsoft.teams2") == teamsCall,
+              "Teams は会議名のウィンドウを選ぶ")
+        check(MeetingWindowSelector.pick(from: [teamsMain, slack], meetingBundleID: "com.microsoft.teams2") == nil,
+              "Teams のメイン画面だけなら選ばない")
+        // A title-less guess is only made for the app holding the microphone.
+        check(MeetingWindowSelector.pick(from: [teamsCall], meetingBundleID: "com.google.Chrome") == nil,
+              "マイクを持たないアプリは題名で判定する")
+        // The main window of the detected app is never taken for the call.
+        check(MeetingWindowSelector.pick(from: [zoomMain], meetingBundleID: "us.zoom.caphost") == nil,
+              "Zoom のメイン画面は選ばない")
         print("MeetingWindowSelectorSelfTest passed")
     }
 

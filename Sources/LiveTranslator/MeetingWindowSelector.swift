@@ -64,15 +64,27 @@ enum MeetingWindowSelector {
         families.first { bundleID.hasPrefix($0) } ?? bundleID
     }
 
-    static func isMeetingWindow(_ candidate: CaptureWindowCandidate) -> Bool {
-        guard candidate.layer == 0,
-              candidate.isOnScreen,
-              candidate.width >= minimumWidth,
-              candidate.height >= minimumHeight,
-              !candidate.title.isEmpty,
-              !candidate.bundleID.hasPrefix(ownBundlePrefix) else {
-            return false
-        }
+    /// Main-window titles of meeting apps. Everything else the microphone app opens
+    /// is taken as the call: Teams names its call window after the meeting subject
+    /// ("Co-pilot課題の… | Microsoft Teams"), so no fixed word can find it.
+    private static let mainWindowTitlePrefixes = [
+        "チャット", "アクティビティ", "予定表", "カレンダー", "チーム", "コミュニティ",
+        "OneDrive", "アプリ", "Copilot", "通話 |", "Chat", "Activity", "Calendar",
+        "Teams |", "Microsoft Teams", "Zoom Workplace", "Zoom Workplace -", "Zoom",
+        "Slack", "Discord", "Webex",
+    ]
+
+    private static func isUsable(_ candidate: CaptureWindowCandidate) -> Bool {
+        candidate.layer == 0
+            && candidate.isOnScreen
+            && candidate.width >= minimumWidth
+            && candidate.height >= minimumHeight
+            && !candidate.title.isEmpty
+            && !candidate.bundleID.hasPrefix(ownBundlePrefix)
+    }
+
+    /// Whether the title alone says this is a call window.
+    static func hasMeetingTitle(_ candidate: CaptureWindowCandidate) -> Bool {
         let family = family(of: candidate.bundleID)
         if browserFamilies.contains(family) {
             return browserTitleMarks.contains { candidate.title.contains($0) }
@@ -81,20 +93,37 @@ enum MeetingWindowSelector {
         return marks.contains { candidate.title.contains($0) }
     }
 
-    /// Prefers the app that holds the microphone, then the larger window, since the
-    /// call window is usually the big one and a stray small one is a preview.
+    static func isMeetingWindow(
+        _ candidate: CaptureWindowCandidate,
+        meetingFamily: String? = nil
+    ) -> Bool {
+        guard isUsable(candidate) else { return false }
+        if hasMeetingTitle(candidate) { return true }
+        // For the app holding the microphone, any window but its main one counts.
+        let family = family(of: candidate.bundleID)
+        guard let meetingFamily, family == meetingFamily,
+              !browserFamilies.contains(family) else { return false }
+        return !mainWindowTitlePrefixes.contains { candidate.title.hasPrefix($0) }
+    }
+
+    /// Prefers the app that holds the microphone, then a title that names a call,
+    /// then the newest window — a call window opens after the app's main window, and
+    /// window IDs only grow — and finally the larger one.
     static func pick(
         from candidates: [CaptureWindowCandidate],
         meetingBundleID: String?
     ) -> CaptureWindowCandidate? {
         let meetingFamily = meetingBundleID.map(family(of:))
+        func rank(_ window: CaptureWindowCandidate) -> (Int, Int, UInt32, Double) {
+            (
+                meetingFamily == family(of: window.bundleID) ? 1 : 0,
+                hasMeetingTitle(window) ? 1 : 0,
+                window.id,
+                window.width * window.height
+            )
+        }
         return candidates
-            .filter(isMeetingWindow)
-            .max { lhs, rhs in
-                let lhsMatches = meetingFamily == family(of: lhs.bundleID)
-                let rhsMatches = meetingFamily == family(of: rhs.bundleID)
-                if lhsMatches != rhsMatches { return !lhsMatches }
-                return lhs.width * lhs.height < rhs.width * rhs.height
-            }
+            .filter { isMeetingWindow($0, meetingFamily: meetingFamily) }
+            .max { rank($0) < rank($1) }
     }
 }
