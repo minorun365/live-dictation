@@ -28,3 +28,12 @@ swiftc \
     -o "${SCHEDULE_TEST_BINARY}"
 
 "${SCHEDULE_TEST_BINARY}"
+
+SELECTOR_TEST_BINARY="${TMPDIR:-/tmp}/live-dictation-meeting-window-selector-test"
+swiftc \
+    -module-cache-path "${MODULE_CACHE}" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/MeetingWindowSelector.swift" \
+    "${PROJECT_DIR}/Tests/MeetingWindowSelectorSelfTest.swift" \
+    -o "${SELECTOR_TEST_BINARY}"
+
+"${SELECTOR_TEST_BINARY}"

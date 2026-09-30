@@ -404,8 +404,21 @@ final class AppModel: NSObject, ObservableObject {
             } else {
                 do {
                     statusMessage = "画面収録を準備中…"
+                    // The detector knows which app holds the microphone; the capture
+                    // uses it to find the call window among several candidates.
+                    var meetingBundleID: String?
+                    if case .meeting(let bundleID) = meetingDetector.state {
+                        meetingBundleID = bundleID
+                    }
                     try await screenshotCaptureManager.start(
-                        sessionDirectoryURL: logger.directoryURL
+                        sessionDirectoryURL: logger.directoryURL,
+                        meetingBundleID: meetingBundleID,
+                        onTargetChange: { payload in
+                            recordingSession.logger.appendEvent(
+                                type: "screen_capture_target",
+                                payload: payload
+                            )
+                        }
                     ) { [weak self] message in
                         guard let self else { return }
                         recordingSession.logger.appendEvent(
@@ -424,7 +437,7 @@ final class AppModel: NSObject, ObservableObject {
                         type: "screen_capture_started",
                         payload: [
                             "interval_seconds": "1",
-                            "target": "main_display"
+                            "target": "meeting_window_or_all_displays"
                         ]
                     )
                 } catch {
