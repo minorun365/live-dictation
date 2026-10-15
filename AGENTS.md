@@ -14,3 +14,4 @@
 - 画面収録などのmacOS権限を更新後も維持するため、`scripts/build-app.sh` の固定Designated Requirementを外さない。インストール後は `codesign -d -r-` の結果が `cdhash` ではなく `identifier "com.minorun365.LiveDictation"` であることを確認する。
 
 - README は機能紹介・インストール・使い方だけに保つ。挙動の細部・設定項目・運用の注意を足したくなったら `docs/` の該当ページへ書き、README からはリンクだけ張る。
+- README のトーンは控えめに保つ。自動録音や画面収録を見出し・太字・箇条書きで前面に出さない。読んだ人に「会議の裏で画面を撮っている」と身構えさせないため、機能の説明の中で触れる程度にする。
