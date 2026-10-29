@@ -2,6 +2,8 @@
 
 日本語の会議を自動で文字起こし・要約するmacOSアプリです。マイクの音声と、ZoomやGoogle MeetなどMacから再生される相手の音声を一緒に収録し、日本語モードではどちらの発言かを分けて記録します。英語を日本語へ翻訳するモードも備えています。Appleの音声認識・翻訳・生成モデルを使い、録音とログはMac内だけに保存します。
 
+![文字起こしちゃんの画面](docs/images/screenshot.png)
+
 ## 動作環境
 
 macOS 26.4以降のApple Silicon Mac。要約にApple Intelligenceを使います。
