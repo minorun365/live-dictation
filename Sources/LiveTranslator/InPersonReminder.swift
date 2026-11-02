@@ -38,6 +38,11 @@ final class InPersonReminder: NSObject {
     private let logger = Logger(subsystem: "com.minorun365.LiveDictation", category: "InPersonReminder")
 
     private var timer: Timer?
+    /// Fires at the next mark exactly. The 20-second poll alone ran about a minute
+    /// late in a real meeting: the reminder came 3:56 before the start, not 5:00.
+    private var markTimer: Timer?
+    /// Held in the few minutes before a mark so App Nap does not defer the timer.
+    private var napGuard: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
     private var meetings: [InPersonMeeting] = []
     private var feedModifiedAt: Date?
@@ -137,6 +142,7 @@ final class InPersonReminder: NSObject {
 
     private func evaluate() {
         let now = Date()
+        defer { scheduleNextMark(after: now) }
         reloadFeedIfChanged(now: now)
         withdrawEndedReminders(now: now)
 
@@ -160,6 +166,43 @@ final class InPersonReminder: NSObject {
             Task { await self.record(meeting, automatically: true) }
         }
     }
+
+    private func scheduleNextMark(after now: Date) {
+        markTimer?.invalidate()
+        markTimer = nil
+        guard let mark = InPersonReminderRule.nextMark(meetings, after: now) else {
+            releaseNapGuard()
+            return
+        }
+        // A hair past the mark, so the check that runs sees the mark as reached.
+        let timer = Timer(fire: mark.addingTimeInterval(0.5), interval: 0, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.evaluate() }
+        }
+        timer.tolerance = 0.5
+        RunLoop.main.add(timer, forMode: .common)
+        markTimer = timer
+
+        if mark.timeIntervalSince(now) <= Self.napGuardLead {
+            if napGuard == nil {
+                napGuard = ProcessInfo.processInfo.beginActivity(
+                    options: [.userInitiatedAllowingIdleSystemSleep],
+                    reason: "対面会議の通知と録音を時刻どおりに行うため"
+                )
+            }
+        } else {
+            releaseNapGuard()
+        }
+    }
+
+    private func releaseNapGuard() {
+        guard let napGuard else { return }
+        ProcessInfo.processInfo.endActivity(napGuard)
+        self.napGuard = nil
+    }
+
+    /// Long enough to cover the gap between the five- and three-minute marks, short
+    /// enough that the app naps normally the rest of the day.
+    private static let napGuardLead: TimeInterval = 6 * 60
 
     private func record(_ meeting: InPersonMeeting, automatically: Bool) async {
         guard !isRecording(), !started.contains(meeting.reminderKey) else { return }

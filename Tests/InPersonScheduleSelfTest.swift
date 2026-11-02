@@ -40,6 +40,12 @@ struct InPersonScheduleSelfTest {
         try check(InPersonReminderRule.stopStep(for: a, at: at("17:08")) == .notice, "終了8分後に止める予告")
         try check(InPersonReminderRule.stopStep(for: a, at: at("17:10")) == .stop, "終了10分後に止める")
 
+        try check(InPersonReminderRule.nextMark(feed.meetings, after: at("16:00")) == at("16:25"), "次の節目は5分前")
+        try check(InPersonReminderRule.nextMark(feed.meetings, after: at("16:25")) == at("16:27"), "5分前の次は3分前")
+        try check(InPersonReminderRule.nextMark(feed.meetings, after: at("16:27")) == at("17:00"), "3分前の次は終了")
+        try check(InPersonReminderRule.nextMark(feed.meetings, after: at("17:00")) == at("17:08"), "終了の次は止める予告")
+        try check(InPersonReminderRule.nextMark([a], after: at("17:10")) == nil, "止めた後は節目なし")
+
         try check(!InPersonReminderRule.isStale(feed, at: at("16:29")), "29分後はまだ新しい")
         try check(InPersonReminderRule.isStale(feed, at: at("16:31")), "31分後は止まっている扱い")
         print("InPersonScheduleSelfTest OK")

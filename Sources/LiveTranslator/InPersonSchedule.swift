@@ -136,6 +136,26 @@ enum InPersonReminderRule {
         return .keepRecording
     }
 
+    /// The next moment something may happen: a reminder, an automatic start, the
+    /// meeting's end, the stop notice or the stop. The reminder schedules a timer for
+    /// exactly this moment, because a menu bar app that is out of sight gets its
+    /// repeating timers delayed by App Nap — by about a minute in practice.
+    static func nextMark(_ meetings: [InPersonMeeting], after now: Date) -> Date? {
+        meetings
+            .flatMap { meeting in
+                let stopAt = meeting.end.addingTimeInterval(autoStopGrace)
+                return [
+                    meeting.start.addingTimeInterval(-leadTime),
+                    meeting.start.addingTimeInterval(-autoStartLead),
+                    meeting.end,
+                    stopAt.addingTimeInterval(-stopNoticeLead),
+                    stopAt,
+                ]
+            }
+            .filter { $0 > now }
+            .min()
+    }
+
     static func isStale(_ feed: InPersonMeetingFeed, at now: Date) -> Bool {
         guard let fetchedAt = feed.fetchedAt else { return true }
         return now.timeIntervalSince(fetchedAt) > staleAfter
