@@ -6,9 +6,10 @@ import OSLog
 /// Looks after in-person meetings, which give the app no signal of their own.
 ///
 /// Five minutes before one starts, a reminder offers a button that starts the
-/// in-person recording. If nothing is recording three minutes before the start, the
-/// recording starts by itself. A recording started for a meeting stops ten minutes
-/// after the scheduled end, with a notice two minutes earlier that can keep it going.
+/// in-person recording right then. With automatic recording turned on in the menu,
+/// a meeting nobody has started recording three minutes before the start begins by
+/// itself, and a recording started for a meeting stops ten minutes after the scheduled
+/// end, with a notice two minutes earlier that can keep it going.
 ///
 /// Web meetings start recording by themselves because the meeting app takes the
 /// microphone. A meeting in a room gives no such signal, so it is easy to walk in and
@@ -22,8 +23,11 @@ final class InPersonReminder: NSObject {
     private(set) var feedWarning: String?
     var onFeedWarningChange: ((String?) -> Void)?
 
-    /// The menu toggle writes this key. Starting on its own is the default: the
-    /// recording that matters is the one nobody remembered to start.
+    /// The menu toggle writes this key. Off by default: the reminder and its button
+    /// are the standard behaviour, and recording a room without anyone pressing a
+    /// button is something each user opts into. The automatic stop belongs to the same
+    /// switch, so with it off a recording started from the reminder runs until it is
+    /// stopped by hand, as it always has.
     nonisolated static let autoStartDefaultsKey = "inPersonAutoStart"
 
     private let feedURL: URL
@@ -74,7 +78,7 @@ final class InPersonReminder: NSObject {
     }
 
     private var autoStartEnabled: Bool {
-        UserDefaults.standard.object(forKey: Self.autoStartDefaultsKey) as? Bool ?? true
+        UserDefaults.standard.bool(forKey: Self.autoStartDefaultsKey)
     }
 
     func start() {
@@ -178,7 +182,7 @@ final class InPersonReminder: NSObject {
     }
 
     private func handleStop(of meeting: InPersonMeeting, at now: Date) {
-        guard !keepGoing.contains(meeting.reminderKey) else { return }
+        guard autoStartEnabled, !keepGoing.contains(meeting.reminderKey) else { return }
         switch InPersonReminderRule.stopStep(for: meeting, at: now) {
         case .keepRecording:
             break
