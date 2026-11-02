@@ -30,8 +30,8 @@ struct InPersonScheduleSelfTest {
         let moved = InPersonMeeting(id: "a", title: "相談", start: at("16:40"), end: at("17:10"), location: nil)
         try check(moved.reminderKey != a.reminderKey, "時間が変わったら出し直す")
 
-        try check(InPersonReminderRule.dueForAutoStart(feed.meetings, at: at("16:26"), alreadyStarted: []) == nil, "4分前は自動で始めない")
-        try check(InPersonReminderRule.dueForAutoStart(feed.meetings, at: at("16:27"), alreadyStarted: [])?.id == "a", "3分前ちょうどに自動で始める")
+        try check(InPersonReminderRule.dueForAutoStart(feed.meetings, at: at("16:24"), alreadyStarted: []) == nil, "6分前は自動で始めない")
+        try check(InPersonReminderRule.dueForAutoStart(feed.meetings, at: at("16:25"), alreadyStarted: [])?.id == "a", "通知と同じ5分前ちょうどに自動で始める")
         try check(InPersonReminderRule.dueForAutoStart(feed.meetings, at: at("16:50"), alreadyStarted: [])?.id == "a", "寝ていて過ぎても会議中なら始める")
         try check(InPersonReminderRule.dueForAutoStart(feed.meetings, at: at("16:28"), alreadyStarted: [a.reminderKey]) == nil, "一度始めた会議は（手で止めても）始め直さない")
         try check(InPersonReminderRule.dueForAutoStart(feed.meetings, at: at("17:00"), alreadyStarted: []) == nil, "終わった会議は始めない")
@@ -41,8 +41,7 @@ struct InPersonScheduleSelfTest {
         try check(InPersonReminderRule.stopStep(for: a, at: at("17:10")) == .stop, "終了10分後に止める")
 
         try check(InPersonReminderRule.nextMark(feed.meetings, after: at("16:00")) == at("16:25"), "次の節目は5分前")
-        try check(InPersonReminderRule.nextMark(feed.meetings, after: at("16:25")) == at("16:27"), "5分前の次は3分前")
-        try check(InPersonReminderRule.nextMark(feed.meetings, after: at("16:27")) == at("17:00"), "3分前の次は終了")
+        try check(InPersonReminderRule.nextMark(feed.meetings, after: at("16:25")) == at("17:00"), "5分前の次は終了")
         try check(InPersonReminderRule.nextMark(feed.meetings, after: at("17:00")) == at("17:08"), "終了の次は止める予告")
         try check(InPersonReminderRule.nextMark([a], after: at("17:10")) == nil, "止めた後は節目なし")
 

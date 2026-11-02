@@ -7,8 +7,8 @@ import OSLog
 ///
 /// Five minutes before one starts, a reminder offers a button that starts the
 /// in-person recording right then. With automatic recording turned on in the menu,
-/// a meeting nobody has started recording three minutes before the start begins by
-/// itself, and a recording started for a meeting stops ten minutes after the scheduled
+/// that same five-minute mark starts the recording by itself instead of offering the
+/// button, and a recording started for a meeting stops ten minutes after the scheduled
 /// end, with a notice two minutes earlier that can keep it going.
 ///
 /// Web meetings start recording by themselves because the meeting app takes the
@@ -63,8 +63,7 @@ final class InPersonReminder: NSObject {
     nonisolated private static let stopActionID = "stopInPersonRecording"
     nonisolated private static let stopSoonCategoryID = "inPersonRecordingStopSoon"
     nonisolated private static let keepActionID = "keepInPersonRecording"
-    /// The poll also drives the three- and five-minute marks, so it has to be well
-    /// under a minute.
+    /// A fallback for the exact mark timer; it has to stay well under a minute.
     private static let pollInterval: TimeInterval = 20
 
     init(
@@ -156,14 +155,20 @@ final class InPersonReminder: NSObject {
         }
         recordingFor = nil
 
+        // With automatic recording on, the five-minute mark starts the recording
+        // instead of offering a button for it; the "recording started" notice that
+        // follows takes the reminder's place.
+        if autoStartEnabled {
+            if let meeting = InPersonReminderRule.dueForAutoStart(meetings, at: now, alreadyStarted: started) {
+                reminded.insert(meeting.reminderKey)
+                Task { await self.record(meeting, automatically: true) }
+            }
+            return
+        }
+
         for meeting in InPersonReminderRule.due(meetings, at: now, alreadyReminded: reminded) {
             reminded.insert(meeting.reminderKey)
             post(meeting)
-        }
-
-        if autoStartEnabled,
-           let meeting = InPersonReminderRule.dueForAutoStart(meetings, at: now, alreadyStarted: started) {
-            Task { await self.record(meeting, automatically: true) }
         }
     }
 
@@ -200,8 +205,8 @@ final class InPersonReminder: NSObject {
         self.napGuard = nil
     }
 
-    /// Long enough to cover the gap between the five- and three-minute marks, short
-    /// enough that the app naps normally the rest of the day.
+    /// Long enough to cover the run-up to a mark, short enough that the app naps
+    /// normally the rest of the day.
     private static let napGuardLead: TimeInterval = 6 * 60
 
     private func record(_ meeting: InPersonMeeting, automatically: Bool) async {
@@ -295,9 +300,6 @@ final class InPersonReminder: NSObject {
         var body = "\(Self.timeFormatter.string(from: meeting.start))〜\(Self.timeFormatter.string(from: meeting.end))"
         if let location = meeting.location, !location.isEmpty {
             body += "　\(location)"
-        }
-        if autoStartEnabled {
-            body += "\n3分前になったら自動で録音を始めます"
         }
         notify(
             id: meeting.reminderKey,

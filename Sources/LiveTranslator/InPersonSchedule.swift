@@ -93,11 +93,6 @@ enum InPersonReminderRule {
             .sorted { $0.start < $1.start }
     }
 
-    /// Three minutes before the start, an in-person meeting nobody has started recording
-    /// begins recording by itself. The five-minute reminder comes first, so this only
-    /// acts when that reminder was missed or ignored.
-    static let autoStartLead: TimeInterval = 3 * 60
-
     /// Meetings overrun. A recording the app started for a meeting keeps going this
     /// long past the scheduled end before the app stops it.
     static let autoStopGrace: TimeInterval = 10 * 60
@@ -106,8 +101,10 @@ enum InPersonReminderRule {
     /// time to keep the recording going.
     static let stopNoticeLead: TimeInterval = 2 * 60
 
-    /// The meeting whose recording should start by itself now: from `autoStartLead`
-    /// before the start until the end, so a Mac that wakes mid-meeting still catches it.
+    /// The meeting whose recording should start by itself now, for those who turned
+    /// automatic recording on. It shares the reminder's window — `leadTime` before the
+    /// start until the end — so the reminder and the automatic start never drift apart,
+    /// and a Mac that wakes mid-meeting still catches it.
     static func dueForAutoStart(
         _ meetings: [InPersonMeeting],
         at now: Date,
@@ -115,7 +112,7 @@ enum InPersonReminderRule {
     ) -> InPersonMeeting? {
         meetings
             .filter { meeting in
-                now >= meeting.start.addingTimeInterval(-autoStartLead)
+                now >= meeting.start.addingTimeInterval(-leadTime)
                     && now < meeting.end
                     && !alreadyStarted.contains(meeting.reminderKey)
             }
@@ -136,7 +133,7 @@ enum InPersonReminderRule {
         return .keepRecording
     }
 
-    /// The next moment something may happen: a reminder, an automatic start, the
+    /// The next moment something may happen: the reminder or automatic start, the
     /// meeting's end, the stop notice or the stop. The reminder schedules a timer for
     /// exactly this moment, because a menu bar app that is out of sight gets its
     /// repeating timers delayed by App Nap — by about a minute in practice.
@@ -146,7 +143,6 @@ enum InPersonReminderRule {
                 let stopAt = meeting.end.addingTimeInterval(autoStopGrace)
                 return [
                     meeting.start.addingTimeInterval(-leadTime),
-                    meeting.start.addingTimeInterval(-autoStartLead),
                     meeting.end,
                     stopAt.addingTimeInterval(-stopNoticeLead),
                     stopAt,
