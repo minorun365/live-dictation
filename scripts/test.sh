@@ -46,3 +46,12 @@ swiftc \
     -o "${NOTICE_TEST_BINARY}"
 
 "${NOTICE_TEST_BINARY}"
+
+LAG_TEST_BINARY="${TMPDIR:-/tmp}/live-dictation-recognition-lag-test"
+swiftc \
+    -module-cache-path "${MODULE_CACHE}" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/RecognitionLagMonitor.swift" \
+    "${PROJECT_DIR}/Tests/RecognitionLagMonitorSelfTest.swift" \
+    -o "${LAG_TEST_BINARY}"
+
+"${LAG_TEST_BINARY}"

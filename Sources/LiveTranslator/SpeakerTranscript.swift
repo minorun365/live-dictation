@@ -15,6 +15,18 @@ extension AttributedString {
         }
         return nil
     }
+
+    /// Where this phrase ends inside the recording. Comparing it with the clock shows
+    /// how far the recognizer has fallen behind the live audio.
+    var audioEndSeconds: Double? {
+        var end: Double?
+        for run in runs {
+            if let timeRange = run.audioTimeRange {
+                end = CMTimeGetSeconds(timeRange.end)
+            }
+        }
+        return end
+    }
 }
 
 /// Which side of the meeting a phrase came from.

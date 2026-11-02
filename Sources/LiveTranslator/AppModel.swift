@@ -731,6 +731,11 @@ final class AppModel: NSObject, ObservableObject {
                         isFinal: result.isFinal,
                         sessionID: sessionID
                     )
+                    self?.noteRecognitionProgress(
+                        on: channel,
+                        audioEndSeconds: result.text.audioEndSeconds,
+                        sessionID: sessionID
+                    )
                 }
             } catch is CancellationError {
                 return
@@ -749,6 +754,66 @@ final class AppModel: NSObject, ObservableObject {
                 return
             } catch {
                 self?.handleRecognitionFailure(error, sessionID: sessionID)
+            }
+        }
+    }
+
+    /// A recognizer that falls behind holds its backlog until it is told to finalize,
+    /// so a late session would otherwise stay empty until recording stops.
+    private func noteRecognitionProgress(
+        on channel: RecognitionChannel,
+        audioEndSeconds: Double?,
+        sessionID: UUID
+    ) {
+        guard let audioEndSeconds,
+              sessionRegistry.isActive(id: sessionID),
+              let recordingSession = sessionRegistry.session(for: sessionID) else { return }
+
+        let observation = channel.lagMonitor.observe(
+            audioEndSeconds: audioEndSeconds,
+            at: Date()
+        )
+        let channelName = channel.speaker.map { "\($0)" } ?? "mixed"
+        if observation.shouldReport {
+            recordingSession.logger.appendEvent(
+                type: "recognition_lag",
+                payload: [
+                    "channel": channelName,
+                    "lag_seconds": String(Int(observation.lagSeconds)),
+                    "audio_end_seconds": String(Int(audioEndSeconds))
+                ]
+            )
+        }
+        guard observation.shouldCatchUp, !channel.isCatchingUp else { return }
+
+        channel.isCatchingUp = true
+        recordingSession.logger.appendEvent(
+            type: "recognition_catch_up_started",
+            payload: [
+                "channel": channelName,
+                "lag_seconds": String(Int(observation.lagSeconds))
+            ]
+        )
+        let startedAt = Date()
+        Task { @MainActor in
+            defer { channel.isCatchingUp = false }
+            do {
+                try await channel.analyzer.finalize(through: nil)
+                recordingSession.logger.appendEvent(
+                    type: "recognition_catch_up_finished",
+                    payload: [
+                        "channel": channelName,
+                        "duration_seconds": String(Int(Date().timeIntervalSince(startedAt)))
+                    ]
+                )
+            } catch {
+                recordingSession.logger.appendEvent(
+                    type: "recognition_catch_up_failed",
+                    payload: [
+                        "channel": channelName,
+                        "message": error.localizedDescription
+                    ]
+                )
             }
         }
     }
@@ -1399,6 +1464,8 @@ private final class RecognitionChannel {
     let inputStream: AsyncStream<AnalyzerInput>
     var analyzerTask: Task<Void, Never>?
     var resultsTask: Task<Void, Never>?
+    var lagMonitor = RecognitionLagMonitor()
+    var isCatchingUp = false
 
     init(
         speaker: Speaker?,
@@ -1425,6 +1492,7 @@ private final class RecordingSession {
     let mode: TranscriptionMode
     let logger: SessionLogger
     let channels: [RecognitionChannel]
+    let recordingActivity = RecordingActivity()
 
     var summaryTask: Task<Void, Never>?
     var speakerTranscript: SpeakerTranscript
