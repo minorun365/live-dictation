@@ -93,6 +93,49 @@ enum InPersonReminderRule {
             .sorted { $0.start < $1.start }
     }
 
+    /// Three minutes before the start, an in-person meeting nobody has started recording
+    /// begins recording by itself. The five-minute reminder comes first, so this only
+    /// acts when that reminder was missed or ignored.
+    static let autoStartLead: TimeInterval = 3 * 60
+
+    /// Meetings overrun. A recording the app started for a meeting keeps going this
+    /// long past the scheduled end before the app stops it.
+    static let autoStopGrace: TimeInterval = 10 * 60
+
+    /// How long before the automatic stop the "about to stop" notice appears, leaving
+    /// time to keep the recording going.
+    static let stopNoticeLead: TimeInterval = 2 * 60
+
+    /// The meeting whose recording should start by itself now: from `autoStartLead`
+    /// before the start until the end, so a Mac that wakes mid-meeting still catches it.
+    static func dueForAutoStart(
+        _ meetings: [InPersonMeeting],
+        at now: Date,
+        alreadyStarted: Set<String>
+    ) -> InPersonMeeting? {
+        meetings
+            .filter { meeting in
+                now >= meeting.start.addingTimeInterval(-autoStartLead)
+                    && now < meeting.end
+                    && !alreadyStarted.contains(meeting.reminderKey)
+            }
+            .min { $0.start < $1.start }
+    }
+
+    enum StopStep: Equatable {
+        case keepRecording
+        case notice
+        case stop
+    }
+
+    /// What to do with a recording the app started for `meeting`.
+    static func stopStep(for meeting: InPersonMeeting, at now: Date) -> StopStep {
+        let stopAt = meeting.end.addingTimeInterval(autoStopGrace)
+        if now >= stopAt { return .stop }
+        if now >= stopAt.addingTimeInterval(-stopNoticeLead) { return .notice }
+        return .keepRecording
+    }
+
     static func isStale(_ feed: InPersonMeetingFeed, at now: Date) -> Bool {
         guard let fetchedAt = feed.fetchedAt else { return true }
         return now.timeIntervalSince(fetchedAt) > staleAfter

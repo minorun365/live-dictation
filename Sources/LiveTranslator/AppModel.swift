@@ -73,7 +73,8 @@ final class AppModel: NSObject, ObservableObject {
     private func startInPersonReminders() {
         let reminder = InPersonReminder(
             isRecording: { [weak self] in self?.isRecording ?? false },
-            startInPersonRecording: { [weak self] in await self?.startInPersonRecording() }
+            startInPersonRecording: { [weak self] in await self?.startInPersonRecording() },
+            stopRecording: { [weak self] in self?.stopRecordingIfNeeded() }
         )
         reminder.onFeedWarningChange = { [weak self] warning in
             self?.inPersonFeedWarning = warning

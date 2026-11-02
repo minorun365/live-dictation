@@ -58,6 +58,8 @@ struct LiveDictationApp: App {
 private struct MenuBarContent: View {
     @ObservedObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
+    /// Read by `InPersonReminder` on every check, so flipping it takes effect at once.
+    @AppStorage(InPersonReminder.autoStartDefaultsKey) private var autoStartsInPerson = true
 
     var body: some View {
         Text(model.isRecording
@@ -81,6 +83,8 @@ private struct MenuBarContent: View {
                 Task { await model.startInPersonRecording() }
             }
         }
+
+        Toggle("対面会議を自動で録音", isOn: $autoStartsInPerson)
 
         Button("ウィンドウを開く") {
             openWindow(id: LiveDictationApp.mainWindowID)
