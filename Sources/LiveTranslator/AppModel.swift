@@ -489,6 +489,16 @@ final class AppModel: NSObject, ObservableObject {
                           self.sessionRegistry.isActive(id: recordingSession.id) else { return }
                     self.errorMessage = nil
                     self.statusMessage = self.recordingStatusMessage(for: recordingMode)
+                },
+                onEngineRestarted: { [weak self] trigger in
+                    recordingSession.logger.appendEvent(
+                        type: "meeting_audio_engine_restarted",
+                        payload: ["trigger": trigger]
+                    )
+                    guard let self,
+                          self.sessionRegistry.isActive(id: recordingSession.id) else { return }
+                    self.errorMessage = nil
+                    self.statusMessage = self.recordingStatusMessage(for: recordingMode)
                 }
             ) { [weak self] message in
                 guard let self else { return }

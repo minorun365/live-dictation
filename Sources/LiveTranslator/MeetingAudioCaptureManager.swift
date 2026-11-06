@@ -57,6 +57,10 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
     private var runtimeFailureHandler: (@MainActor @Sendable (String) -> Void)?
     private var sourceReadyHandler: (@MainActor @Sendable (String) -> Void)?
     private var recoveryHandler: (@MainActor @Sendable (Int) -> Void)?
+    private var engineRestartHandler: (@MainActor @Sendable (String) -> Void)?
+    private var engineConfigurationObserver: NSObjectProtocol?
+    /// Reports a failed engine restart only once; cleared when a restart succeeds.
+    private var reportedEngineRestartFailure = false
     private let displaySleepBlocker = DisplaySleepBlocker()
     private var recoveryTask: Task<Void, Never>?
     private var isTearingDown = false
@@ -78,12 +82,14 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         routing: Routing,
         onSourceReady: @escaping @MainActor @Sendable (String) -> Void,
         onRecovered: @escaping @MainActor @Sendable (Int) -> Void,
+        onEngineRestarted: @escaping @MainActor @Sendable (String) -> Void,
         onRuntimeFailure: @escaping @MainActor @Sendable (String) -> Void
     ) async throws {
         await stop()
         stateLock.withLock { isTearingDown = false }
         sourceReadyHandler = onSourceReady
         recoveryHandler = onRecovered
+        engineRestartHandler = onEngineRestarted
         runtimeFailureHandler = onRuntimeFailure
 
         do {
@@ -97,8 +103,74 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         // キャプチャはメインディスプレイに紐づくので、画面が省電力で消えると
         // マイクごと停止する。録音している間だけ画面を起こしておく。
         displaySleepBlocker.begin(reason: "LiveDictation is capturing audio")
+        startEngineConfigurationObserver()
         startWatchdog()
         startWakeObservers()
+    }
+
+    /// The engine ends in the default output device, so plugging in headphones mid-recording
+    /// stops it and posts `AVAudioEngineConfigurationChange`. Left stopped, the taps go
+    /// quiet while SCStream keeps delivering samples, which the watchdog cannot notice.
+    private func startEngineConfigurationObserver() {
+        removeEngineConfigurationObserver()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: audioEngine,
+            queue: nil
+        ) { [weak self] _ in
+            // Delivered on the engine's internal queue; restart from the audio queue instead.
+            self?.restartEngineIfStopped(trigger: "configuration_change")
+        }
+        stateLock.withLock { engineConfigurationObserver = observer }
+    }
+
+    private func removeEngineConfigurationObserver() {
+        let observer = stateLock.withLock { () -> NSObjectProtocol? in
+            let current = engineConfigurationObserver
+            engineConfigurationObserver = nil
+            return current
+        }
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    /// A device switch can post several notifications in a row, so this only acts while the
+    /// engine is stopped. Connections and taps survive the stop and are left as they are.
+    private func restartEngineIfStopped(trigger: String) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            if self.stateLock.withLock({ self.isTearingDown }) { return }
+            guard !self.audioEngine.isRunning else { return }
+
+            do {
+                try self.audioEngine.start()
+                // The players still report isPlaying after the engine stops, so play() alone
+                // is a no-op and the taps receive silence. Stop them first.
+                self.microphonePlayer.stop()
+                self.systemAudioPlayer.stop()
+                self.microphonePlayer.play()
+                self.systemAudioPlayer.play()
+            } catch {
+                // Starting can fail mid-switch. The next notification or the watchdog
+                // retries, so report only the first failure.
+                let shouldReport = self.stateLock.withLock { () -> Bool in
+                    defer { self.reportedEngineRestartFailure = true }
+                    return !self.reportedEngineRestartFailure
+                }
+                if shouldReport {
+                    self.report(failure: "出力先が変わったあと、音声エンジンを再開できませんでした")
+                }
+                return
+            }
+
+            self.stateLock.withLock { self.reportedEngineRestartFailure = false }
+            if let engineRestartHandler = self.engineRestartHandler {
+                Task { @MainActor in
+                    engineRestartHandler(trigger)
+                }
+            }
+        }
     }
 
     /// Closing the lid cuts the microphone in hardware and takes the display away, so
@@ -340,6 +412,9 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
                 guard let self, !Task.isCancelled else { return }
                 if self.stateLock.withLock({ self.isTearingDown }) { return }
 
+                // Retries an engine restart that failed after a configuration change.
+                self.restartEngineIfStopped(trigger: "watchdog")
+
                 let gap = self.stateLock.withLock { () -> TimeInterval? in
                     guard let last = self.lastSampleAt else { return nil }
                     return Date().timeIntervalSince(last)
@@ -451,6 +526,7 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         }
         pendingRecovery?.cancel()
         pendingWatchdog?.cancel()
+        removeEngineConfigurationObserver()
         removeWakeObservers()
         displaySleepBlocker.end()
 
@@ -492,6 +568,8 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         runtimeFailureHandler = nil
         sourceReadyHandler = nil
         recoveryHandler = nil
+        engineRestartHandler = nil
+        stateLock.withLock { reportedEngineRestartFailure = false }
         reportedMicrophoneReady = false
         reportedSystemAudioReady = false
     }
