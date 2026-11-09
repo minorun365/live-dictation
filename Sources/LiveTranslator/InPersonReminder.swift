@@ -1,5 +1,7 @@
 import AppKit
+import CoreGraphics
 import Foundation
+import IOKit
 import OSLog
 @preconcurrency import UserNotifications
 
@@ -43,7 +45,11 @@ final class InPersonReminder: NSObject {
     private var markTimer: Timer?
     /// Held in the few minutes before a mark so App Nap does not defer the timer.
     private var napGuard: NSObjectProtocol?
-    private var wakeObserver: NSObjectProtocol?
+    private var wakeObservers: [NSObjectProtocol] = []
+    /// Failed automatic starts per meeting. A start that fails is tried again on the
+    /// next check, up to `maxAutoStartAttempts`, instead of leaving the meeting unrecorded.
+    private var failedAutoStarts: [String: Int] = [:]
+    private static let maxAutoStartAttempts = 3
     private var meetings: [InPersonMeeting] = []
     private var feedModifiedAt: Date?
     private var reminded: Set<String> = []
@@ -118,12 +124,13 @@ final class InPersonReminder: NSObject {
         // A timer does not fire while the Mac sleeps. Checking on wake means a meeting
         // whose mark passed with the lid closed is still handled as soon as the lid
         // opens.
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.evaluate() }
+        // The screens waking is watched too: an automatic start held back while the lid
+        // was closed goes ahead the moment the lid opens.
+        let workspace = NSWorkspace.shared.notificationCenter
+        wakeObservers = [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification].map { name in
+            workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.evaluate() }
+            }
         }
         evaluate()
     }
@@ -160,6 +167,13 @@ final class InPersonReminder: NSObject {
         // follows takes the reminder's place.
         if autoStartEnabled {
             if let meeting = InPersonReminderRule.dueForAutoStart(meetings, at: now, alreadyStarted: started) {
+                // With the lid closed the Mac is only briefly awake (a dark wake): the
+                // audio devices do not run, and starting then crashed the app. Wait for
+                // the lid to open; the screens-wake check above picks it up right away.
+                if LidState.isClosedWithScreensAsleep() {
+                    logger.info("deferring auto start for \(meeting.reminderKey, privacy: .public): lid closed")
+                    return
+                }
                 reminded.insert(meeting.reminderKey)
                 Task { await self.record(meeting, automatically: true) }
             }
@@ -217,6 +231,21 @@ final class InPersonReminder: NSObject {
         await startInPersonRecording()
         guard isRecording() else {
             recordingFor = nil
+            if automatically {
+                let attempts = failedAutoStarts[meeting.reminderKey, default: 0] + 1
+                failedAutoStarts[meeting.reminderKey] = attempts
+                logger.error("auto start failed for \(meeting.reminderKey, privacy: .public) attempt=\(attempts, privacy: .public)")
+                if attempts < Self.maxAutoStartAttempts {
+                    started.remove(meeting.reminderKey)
+                } else {
+                    notify(
+                        id: "start-failed-\(meeting.reminderKey)",
+                        title: "「\(meeting.title)」の録音を始められませんでした",
+                        body: "メニューから手動で録音を開始してください",
+                        category: ""
+                    )
+                }
+            }
             return
         }
         if automatically {
@@ -382,5 +411,29 @@ extension InPersonReminder: UNUserNotificationCenterDelegate {
         Task { @MainActor [weak self] in
             self?.handleResponse(category: category, action: action, key: key)
         }
+    }
+}
+
+/// Whether the Mac is closed up and only awake for background work.
+///
+/// A timer can fire during a dark wake with the lid shut. The display is asleep then and
+/// the audio hardware never starts, so a recording cannot begin. A Mac running closed
+/// with an external display keeps its screens awake and is not treated as closed.
+enum LidState {
+    static func isClosedWithScreensAsleep() -> Bool {
+        isLidClosed() && CGDisplayIsAsleep(CGMainDisplayID()) != 0
+    }
+
+    private static func isLidClosed() -> Bool {
+        let rootDomain = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard rootDomain != 0 else { return false }
+        defer { IOObjectRelease(rootDomain) }
+        let value = IORegistryEntryCreateCFProperty(
+            rootDomain,
+            "AppleClamshellState" as CFString,
+            kCFAllocatorDefault,
+            0
+        )?.takeRetainedValue()
+        return (value as? Bool) ?? false
     }
 }

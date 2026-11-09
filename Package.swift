@@ -11,8 +11,13 @@ let package = Package(
         .executable(name: "LiveDictation", targets: ["LiveDictation"])
     ],
     targets: [
+        .target(
+            name: "ObjCExceptionCatcher",
+            path: "Sources/ObjCExceptionCatcher"
+        ),
         .executableTarget(
             name: "LiveDictation",
+            dependencies: ["ObjCExceptionCatcher"],
             path: "Sources/LiveTranslator"
         )
     ]

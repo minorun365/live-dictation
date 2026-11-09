@@ -2,6 +2,7 @@ import AVFoundation
 import AppKit
 import CoreMedia
 import Foundation
+import ObjCExceptionCatcher
 import Speech
 @preconcurrency import ScreenCaptureKit
 
@@ -149,8 +150,7 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
                 // is a no-op and the taps receive silence. Stop them first.
                 self.microphonePlayer.stop()
                 self.systemAudioPlayer.stop()
-                self.microphonePlayer.play()
-                self.systemAudioPlayer.play()
+                try self.startPlayers()
             } catch {
                 // Starting can fail mid-switch. The next notification or the watchdog
                 // retries, so report only the first failure.
@@ -309,8 +309,21 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         audioEngine.mainMixerNode.outputVolume = 0
         audioEngine.prepare()
         try audioEngine.start()
-        microphonePlayer.play()
-        systemAudioPlayer.play()
+        try startPlayers()
+    }
+
+    /// `play()` raises an Objective-C exception instead of returning an error when the
+    /// engine never runs an IO cycle — as on a Mac briefly awake with the lid closed,
+    /// where the output device does not actually run. Uncaught, that aborts the app.
+    private func startPlayers() throws {
+        do {
+            try LDObjCException.perform {
+                microphonePlayer.play()
+                systemAudioPlayer.play()
+            }
+        } catch {
+            throw MeetingAudioCaptureError.playerFailedToStart(error.localizedDescription)
+        }
     }
 
     private func startCapture() async throws {
@@ -828,6 +841,7 @@ private final class MeetingAudioConverterInputProvider: @unchecked Sendable {
 private enum MeetingAudioCaptureError: LocalizedError {
     case mainDisplayUnavailable
     case recordingFormatMismatch
+    case playerFailedToStart(String)
 
     var errorDescription: String? {
         switch self {
@@ -835,6 +849,8 @@ private enum MeetingAudioCaptureError: LocalizedError {
             "メイン画面に紐づくシステム音声を取得できません。"
         case .recordingFormatMismatch:
             "録音ファイルの形式が音声入力と一致しないため、録音を開始できません。"
+        case .playerFailedToStart(let reason):
+            "音声エンジンが動き出さなかったため、録音を開始できません（\(reason)）。"
         }
     }
 }
