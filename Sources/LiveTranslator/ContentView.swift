@@ -227,17 +227,21 @@ private struct TranscriptPane: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(text)
-                            .font(.system(size: 19))
-                            .lineSpacing(6)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    // 全文をひとつの Text にすると、更新のたびに全文の字詰めをやり直して
+                    // 長い会議ほど CPU を使い切る。かたまりに分けて見えている分だけ組む。
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(TranscriptChunker.chunks(of: text).enumerated()), id: \.offset) { _, chunk in
+                            Text(chunk.text.isEmpty ? " " : chunk.text)
+                                .font(.system(size: 19))
+                                .lineSpacing(6)
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                        }
 
                         Color.clear
                             .frame(height: 1)
                             .id(bottomID)
                     }
+                    .textSelection(.enabled)
                     .padding(16)
                 }
                 .onScrollPhaseChange { oldPhase, newPhase, context in
