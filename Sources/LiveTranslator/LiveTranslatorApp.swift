@@ -18,7 +18,7 @@ struct LiveDictationApp: App {
         .commands {
             CommandGroup(replacing: .appTermination) {
                 Button("文字起こしちゃんを終了") {
-                    model.stopRecordingIfNeeded()
+                    // 録音の保存は AppDelegate.applicationShouldTerminate が待つ
                     NSApplication.shared.terminate(nil)
                 }
                 .keyboardShortcut("q")
@@ -93,7 +93,7 @@ private struct MenuBarContent: View {
         Divider()
 
         Button("文字起こしちゃんを終了") {
-            model.stopRecordingIfNeeded()
+            // 録音の保存は AppDelegate.applicationShouldTerminate が待つ
             NSApplication.shared.terminate(nil)
         }
     }
@@ -121,5 +121,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     /// working while nothing is on screen.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// 録音中や停止処理の途中で終わると、音声ファイルに目次が書かれず開けなくなる。
+    /// 保存が終わるまで終了を保留する。固まったときに終われなくならないよう上限を設ける。
+    @MainActor
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let terminateNow = TerminationGate.shared.shouldTerminateNow(timeout: .seconds(60)) { allow in
+            sender.reply(toApplicationShouldTerminate: allow)
+        }
+        return terminateNow ? .terminateNow : .terminateLater
     }
 }

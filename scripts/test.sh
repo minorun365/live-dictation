@@ -64,3 +64,12 @@ swiftc \
     -o "${CHUNKER_TEST_BINARY}"
 
 "${CHUNKER_TEST_BINARY}"
+
+GATE_TEST_BINARY="${TMPDIR:-/tmp}/live-dictation-termination-gate-test"
+swiftc \
+    -module-cache-path "${MODULE_CACHE}" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/TerminationGate.swift" \
+    "${PROJECT_DIR}/Tests/TerminationGateSelfTest.swift" \
+    -o "${GATE_TEST_BINARY}"
+
+"${GATE_TEST_BINARY}"
