@@ -55,3 +55,21 @@ swiftc \
     -o "${LAG_TEST_BINARY}"
 
 "${LAG_TEST_BINARY}"
+
+CHUNKER_TEST_BINARY="${TMPDIR:-/tmp}/live-dictation-transcript-chunker-test"
+swiftc \
+    -module-cache-path "${MODULE_CACHE}" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/TranscriptChunker.swift" \
+    "${PROJECT_DIR}/Tests/TranscriptChunkerSelfTest.swift" \
+    -o "${CHUNKER_TEST_BINARY}"
+
+"${CHUNKER_TEST_BINARY}"
+
+GATE_TEST_BINARY="${TMPDIR:-/tmp}/live-dictation-termination-gate-test"
+swiftc \
+    -module-cache-path "${MODULE_CACHE}" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/TerminationGate.swift" \
+    "${PROJECT_DIR}/Tests/TerminationGateSelfTest.swift" \
+    -o "${GATE_TEST_BINARY}"
+
+"${GATE_TEST_BINARY}"

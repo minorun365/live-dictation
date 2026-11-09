@@ -41,6 +41,8 @@ final class AppModel: NSObject, ObservableObject {
     private var manualLimitTask: Task<Void, Never>?
     private var isStoppingCapture = false
     private var deferredDetectorStart = false
+    /// 終了を待っている間は、会議検知などから新しい録音を始めない。
+    private var isTerminating = false
     private var titleUpgradeTask: Task<Void, Never>?
     private let sessionRegistry = SessionRegistry<UUID, RecordingSession>()
 
@@ -68,6 +70,36 @@ final class AppModel: NSObject, ObservableObject {
         scheduleTitleUpgrades()
         startMeetingDetection()
         startInPersonReminders()
+        registerTerminationGate()
+    }
+
+    /// 終了の操作（⌘Q・メニュー・Dock・ログアウト）を、録音の保存が終わるまで保留させる。
+    private func registerTerminationGate() {
+        let gate = TerminationGate.shared
+        gate.hasPendingWork = { [weak self] in
+            self?.hasPendingRecordingWork ?? false
+        }
+        gate.finishPendingWork = { [weak self] in
+            await self?.prepareForTermination()
+        }
+    }
+
+    private var hasPendingRecordingWork: Bool {
+        isRecording || isStoppingCapture || !sessionRegistry.allSessions.isEmpty
+    }
+
+    /// 録音中なら止め、停止処理の途中のセッションも含めて保存し終わるまで待つ。
+    private func prepareForTermination() async {
+        isTerminating = true
+        deferredDetectorStart = false
+        statusMessage = "録音を保存してから終了します…"
+        while hasPendingRecordingWork {
+            if isRecording {
+                startedByDetector = false
+                await stopRecording()
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
     }
 
     private func startInPersonReminders() {
@@ -312,7 +344,7 @@ final class AppModel: NSObject, ObservableObject {
     #endif
 
     private func startRecording(mode: TranscriptionMode? = nil) async {
-        guard !isRecording, !isStoppingCapture, activeSession == nil else { return }
+        guard !isRecording, !isStoppingCapture, !isTerminating, activeSession == nil else { return }
         errorMessage = nil
         showCurrentSession()
         let recordingMode = mode ?? selectedMode

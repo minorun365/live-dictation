@@ -27,7 +27,7 @@ if [ ! -f "$(xcrun --show-sdk-platform-path 2>/dev/null)/Developer/usr/lib/swift
     done
 fi
 
-swift build -c release --product "${EXECUTABLE_NAME}" "${BUILD_FLAGS[@]}"
+swift build -c release --product "${EXECUTABLE_NAME}" ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"}
 BIN_DIR="$(swift build -c release --show-bin-path)"
 
 mkdir -p "${APP_DIR}/Contents/MacOS"
