@@ -193,11 +193,12 @@ final class AppModel: NSObject, ObservableObject {
         await startRecording(mode: .inPerson)
     }
 
-    /// Starts an English recording straight from the menu bar. Like the in-person
-    /// entry, the mode applies to this recording only.
-    func startEnglishRecording() async {
+    /// Starts a recording in the mode named by a menu bar entry. The mode applies to
+    /// this recording only; the window's picker, and so the mode the detector uses
+    /// for the next meeting, is left alone.
+    func startRecording(as mode: TranscriptionMode) async {
         guard !isRecording else { return }
-        await startRecording(mode: .englishTranslation)
+        await startRecording(mode: mode)
     }
 
     /// For a meeting that turned out to be in English after the detector had already

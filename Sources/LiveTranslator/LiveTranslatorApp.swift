@@ -95,37 +95,47 @@ private struct MenuBarContent: View {
             Text(warning)
         }
 
+        // The menu has three kinds of entries, kept apart by dividers: acting on the
+        // recording, the automatic-recording setting, and the app itself.
         Divider()
 
-        Button(model.isRecording ? "録音を停止" : "手動で録音開始") {
-            Task { await model.toggleRecording() }
+        if model.isRecording {
+            Button("録音を停止") {
+                Task { await model.toggleRecording() }
+            }
+            if model.currentMode != .englishTranslation {
+                Button("英語モードに切り替える") {
+                    Task { await model.switchToEnglish() }
+                }
+            }
+        } else {
+            // One header, then every way to start by hand. Each entry names the mode
+            // it records in instead of following the window's picker, so the menu
+            // alone says what will happen. The two web-meeting entries share a
+            // prefix rather than a submenu: starting a recording is done in a hurry,
+            // and a submenu would add a hover to the most common action.
+            Section("手動で録音を開始") {
+                Button("Web会議（日本語）") {
+                    Task { await model.startRecording(as: .japanese) }
+                }
+                Button("Web会議（英語）") {
+                    Task { await model.startRecording(as: .englishTranslation) }
+                }
+                Button("対面会議") {
+                    Task { await model.startRecording(as: .inPerson) }
+                }
+            }
         }
 
-        // Meeting rooms are where the window is least likely to be open, so in-person
-        // recording gets its own entry rather than a mode to pick beforehand.
-        if !model.isRecording {
-            Button("対面会議を開始") {
-                Task { await model.startInPersonRecording() }
-            }
-            // English gets the same kind of entry: the detector starts every meeting
-            // in the mode picked in the window, which is Japanese unless someone
-            // opened the window and changed it beforehand.
-            Button("英語会議を開始") {
-                Task { await model.startEnglishRecording() }
-            }
-        } else if model.currentMode != .englishTranslation {
-            Button("英語モードに切り替える") {
-                Task { await model.switchToEnglish() }
-            }
-        }
+        Divider()
 
         Toggle("対面会議を自動で録音", isOn: $autoStartsInPerson)
+
+        Divider()
 
         Button("ウィンドウを開く") {
             openWindow(id: LiveDictationApp.mainWindowID)
         }
-
-        Divider()
 
         Button("文字起こしちゃんを終了") {
             // 録音の保存は AppDelegate.applicationShouldTerminate が待つ
