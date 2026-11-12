@@ -49,7 +49,7 @@ struct ContentView: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(width: 280)
+                .frame(width: 420)
                 .disabled(model.isRecording)
 
                 Button("保存先を開く") {
@@ -196,7 +196,7 @@ struct TranscriptHistory: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            if model.displayedMode == .englishTranslation {
+            if model.displayedMode.translatesEnglish {
                 TranscriptPane(title: "English", text: model.displayedEnglishText)
             }
             TranscriptPane(

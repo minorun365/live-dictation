@@ -209,16 +209,21 @@ final class AppModel: NSObject, ObservableObject {
     func switchToEnglish() async {
         guard isRecording, !isStoppingCapture,
               let session = activeSession,
-              session.mode != .englishTranslation else { return }
+              !session.mode.translatesEnglish else { return }
+        // A recording made in a room stays one: the in-person English mode keeps the
+        // screen out of it, just as the mode being left did.
+        let english: TranscriptionMode = session.mode.capturesScreen
+            ? .englishTranslation
+            : .inPersonEnglish
         session.logger.appendEvent(
             type: "mode_switch_requested",
             payload: [
                 "from": session.mode.rawValue,
-                "to": TranscriptionMode.englishTranslation.rawValue
+                "to": english.rawValue
             ]
         )
         pendingRestart = PendingRestart(
-            mode: .englishTranslation,
+            mode: english,
             fallback: session.mode,
             byDetector: startedByDetector
         )
@@ -424,7 +429,7 @@ final class AppModel: NSObject, ObservableObject {
         errorMessage = nil
         showCurrentSession()
         let recordingMode = mode ?? selectedMode
-        if recordingMode == .englishTranslation {
+        if recordingMode.translatesEnglish {
             mainWindowRequest += 1
         }
         titleUpgradeTask?.cancel()
@@ -479,7 +484,7 @@ final class AppModel: NSObject, ObservableObject {
             let speakers: [Speaker?] = switch recordingMode {
             case .japanese: [.me, .others]
             case .inPerson: [.me]
-            case .englishTranslation: [nil]
+            case .englishTranslation, .inPersonEnglish: [nil]
             }
             var newChannels: [RecognitionChannel] = []
             for speaker in speakers {
@@ -717,7 +722,7 @@ final class AppModel: NSObject, ObservableObject {
             channel.resultsTask?.cancel()
         }
 
-        if recordingSession.mode == .englishTranslation,
+        if recordingSession.mode.translatesEnglish,
            !recordingSession.volatileEnglish.isEmpty {
             let finalVolatileEnglish = recordingSession.volatileEnglish
             commitFinalEnglish(finalVolatileEnglish, in: recordingSession)
@@ -732,7 +737,7 @@ final class AppModel: NSObject, ObservableObject {
             commitPendingJapanese(in: recordingSession)
         }
 
-        if recordingSession.mode == .englishTranslation {
+        if recordingSession.mode.translatesEnglish {
             await waitForFinalTranslations(in: recordingSession)
         }
         await refreshRecentSummary(for: recordingSession, force: true)
@@ -1557,6 +1562,8 @@ final class AppModel: NSObject, ObservableObject {
             "同じ部屋での会話を、発言者を分けずに文字起こしします"
         case .englishTranslation:
             "録音を開始すると、英語を日本語へ翻訳します"
+        case .inPersonEnglish:
+            "同じ部屋での英語を、日本語へ翻訳します"
         }
     }
 
@@ -1566,7 +1573,7 @@ final class AppModel: NSObject, ObservableObject {
             "日本語を文字起こし中"
         case .inPerson:
             "対面の会話を文字起こし中"
-        case .englishTranslation:
+        case .englishTranslation, .inPersonEnglish:
             "録音・翻訳中"
         }
         return isSavingScreenshots ? "\(message)・画面を1秒ごとに保存中" : "\(message)（画面保存なし）"

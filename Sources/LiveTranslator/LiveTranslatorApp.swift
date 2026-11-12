@@ -103,26 +103,34 @@ private struct MenuBarContent: View {
             Button("録音を停止") {
                 Task { await model.toggleRecording() }
             }
-            if model.currentMode != .englishTranslation {
+            if !model.currentMode.translatesEnglish {
                 Button("英語モードに切り替える") {
                     Task { await model.switchToEnglish() }
                 }
             }
         } else {
-            // One header, then every way to start by hand. Each entry names the mode
-            // it records in instead of following the window's picker, so the menu
-            // alone says what will happen. The two web-meeting entries share a
-            // prefix rather than a submenu: starting a recording is done in a hurry,
-            // and a submenu would add a hover to the most common action.
+            // One header, then every way to start by hand. Each entry records in a
+            // fixed mode instead of following the window's picker, so the menu alone
+            // says what will happen.
+            //
+            // There are two places (web, in a room) times two languages. Listing all
+            // four makes every row carry a qualifier, so the rows are the two places
+            // in Japanese — what nearly every recording is, and done in a hurry — and
+            // English, the rare case, gets one row that opens onto the same two.
             Section("手動で録音を開始") {
-                Button("Web会議（日本語）") {
+                Button("Web会議") {
                     Task { await model.startRecording(as: .japanese) }
-                }
-                Button("Web会議（英語）") {
-                    Task { await model.startRecording(as: .englishTranslation) }
                 }
                 Button("対面会議") {
                     Task { await model.startRecording(as: .inPerson) }
+                }
+                Menu("英語で開始") {
+                    Button("Web会議") {
+                        Task { await model.startRecording(as: .englishTranslation) }
+                    }
+                    Button("対面会議") {
+                        Task { await model.startRecording(as: .inPersonEnglish) }
+                    }
                 }
             }
         }
