@@ -41,6 +41,24 @@ final class AppModel: NSObject, ObservableObject {
     private var manualLimitTask: Task<Void, Never>?
     private var isStoppingCapture = false
     private var deferredDetectorStart = false
+    /// Armed from the menu bar before joining an English meeting: the next recording
+    /// the detector starts runs in English, once. Kept apart from `selectedMode` so the
+    /// meetings after that one fall back to Japanese without anyone resetting it.
+    @Published private(set) var nextMeetingIsEnglish = false
+    /// Bumped whenever a recording needs the main window on screen. Translation runs
+    /// inside the window's `translationTask`, so an English recording started while
+    /// the window is closed would otherwise save no Japanese at all.
+    @Published private(set) var mainWindowRequest = 0
+    /// Set while a recording is being closed only to reopen in another mode.
+    private var pendingRestart: PendingRestart?
+
+    private struct PendingRestart {
+        let mode: TranscriptionMode
+        /// The mode to go back to if the new one cannot start, so a failed switch
+        /// does not leave the rest of the meeting unrecorded.
+        let fallback: TranscriptionMode
+        let byDetector: Bool
+    }
     /// 終了を待っている間は、会議検知などから新しい録音を始めない。
     private var isTerminating = false
     private var titleUpgradeTask: Task<Void, Never>?
@@ -92,6 +110,7 @@ final class AppModel: NSObject, ObservableObject {
     private func prepareForTermination() async {
         isTerminating = true
         deferredDetectorStart = false
+        pendingRestart = nil
         statusMessage = "録音を保存してから終了します…"
         while hasPendingRecordingWork {
             if isRecording {
@@ -178,6 +197,82 @@ final class AppModel: NSObject, ObservableObject {
         await startRecording(mode: .inPerson)
     }
 
+    /// Starts an English recording straight from the menu bar. Like the in-person
+    /// entry, the mode applies to this recording only.
+    func startEnglishRecording() async {
+        guard !isRecording else { return }
+        nextMeetingIsEnglish = false
+        await startRecording(mode: .englishTranslation)
+    }
+
+    func setNextMeetingEnglish(_ isEnglish: Bool) {
+        nextMeetingIsEnglish = isEnglish
+    }
+
+    /// For a meeting that turned out to be in English after the detector had already
+    /// started it in Japanese. The recognizer's language is fixed when a recording
+    /// starts, so this closes the current recording and opens a new one in English;
+    /// what was recorded so far stays behind as its own short session. Whether the
+    /// meeting app ends the recording carries over to the new one.
+    func switchToEnglish() async {
+        guard isRecording, !isStoppingCapture,
+              let session = activeSession,
+              session.mode != .englishTranslation else { return }
+        session.logger.appendEvent(
+            type: "mode_switch_requested",
+            payload: [
+                "from": session.mode.rawValue,
+                "to": TranscriptionMode.englishTranslation.rawValue
+            ]
+        )
+        pendingRestart = PendingRestart(
+            mode: .englishTranslation,
+            fallback: session.mode,
+            byDetector: startedByDetector
+        )
+        await stopRecording()
+    }
+
+    /// Starts the recording the detector asked for, in English if that was armed.
+    /// The arming is spent only once the recording is actually running, so a failed
+    /// start does not silently turn the retry back into Japanese.
+    private func startDetectorRecording() async {
+        let english = nextMeetingIsEnglish
+        startedByDetector = true
+        await startRecording(mode: english ? .englishTranslation : nil)
+        // startRecording reports its own failures; only keep the flag if it worked,
+        // so a failed start cannot stop a later recording made by hand.
+        if isRecording {
+            if english { nextMeetingIsEnglish = false }
+        } else {
+            startedByDetector = false
+        }
+    }
+
+    /// Reopens the recording `switchToEnglish` just closed. Called from
+    /// `stopRecording` as soon as the capture is released, before the old session is
+    /// finalized, so the gap in the audio stays as short as the stop itself.
+    private func restartAfterSwitch(_ restart: PendingRestart) async {
+        // The meeting ended while the old recording was closing: the detector has
+        // already reported idle and will not report it again, so a new recording
+        // would have nothing to end it.
+        if restart.byDetector, meetingDetector.state == .idle {
+            startedByDetector = false
+            return
+        }
+        startedByDetector = restart.byDetector
+        await startRecording(mode: restart.mode)
+        if !isRecording {
+            await startRecording(mode: restart.fallback)
+            if isRecording {
+                errorMessage = "\(restart.mode.label)へ切り替えられなかったため、\(restart.fallback.label)で録音を続けています"
+            }
+        }
+        if !isRecording {
+            startedByDetector = false
+        }
+    }
+
     /// Records meetings without being asked: when a meeting app starts using the
     /// microphone the recording begins, and it ends once that app lets go.
     private func startMeetingDetection() {
@@ -195,13 +290,7 @@ final class AppModel: NSObject, ObservableObject {
                 return
             }
             guard !isRecording else { return }
-            startedByDetector = true
-            await startRecording()
-            // startRecording reports its own failures; only keep the flag if it worked,
-            // so a failed start cannot stop a later recording made by hand.
-            if !isRecording {
-                startedByDetector = false
-            }
+            await startDetectorRecording()
         case .idle:
             // Leave recordings started by hand alone — the meeting app releasing the
             // microphone says nothing about whether that recording is finished.
@@ -348,6 +437,9 @@ final class AppModel: NSObject, ObservableObject {
         errorMessage = nil
         showCurrentSession()
         let recordingMode = mode ?? selectedMode
+        if recordingMode == .englishTranslation {
+            mainWindowRequest += 1
+        }
         titleUpgradeTask?.cancel()
         titleUpgradeTask = nil
 
@@ -612,13 +704,13 @@ final class AppModel: NSObject, ObservableObject {
         isSavingScreenshots = false
         isStoppingCapture = false
 
-        if deferredDetectorStart {
+        if let restart = pendingRestart {
+            pendingRestart = nil
             deferredDetectorStart = false
-            startedByDetector = true
-            await startRecording()
-            if !isRecording {
-                startedByDetector = false
-            }
+            await restartAfterSwitch(restart)
+        } else if deferredDetectorStart {
+            deferredDetectorStart = false
+            await startDetectorRecording()
         }
 
         for channel in recordingSession.channels {

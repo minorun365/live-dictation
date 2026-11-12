@@ -33,13 +33,19 @@ struct LiveDictationApp: App {
             // Idle shows someone asleep, recording shows someone taking notes. The menu
             // bar shows up on shared screens, so it carries only a small drawing — no
             // label, dot, or red tint that would distract from what is being presented.
-            Image(nsImage: model.isRecording ? Self.recordingMenuBarIcon : Self.menuBarIcon)
+            MenuBarLabel(model: model)
         }
+    }
+
+    /// Whether the main window exists, on screen or in the Dock. `openWindow` on a
+    /// `WindowGroup` adds another window each time, so callers check this first.
+    static var mainWindowIsOpen: Bool {
+        NSApp.windows.contains { ($0.isVisible || $0.isMiniaturized) && $0.canBecomeMain }
     }
 
     // Idle: someone who dozed off over a book. The drawing is roughly square, so it
     // sits in the same 18pt square as the recording icon.
-    private static let menuBarIcon: NSImage = {
+    fileprivate static let menuBarIcon: NSImage = {
         let image = NSImage(named: "MenuBarIcon")
             ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "文字起こしちゃん")!
         image.size = NSSize(width: 18, height: 18)
@@ -47,11 +53,30 @@ struct LiveDictationApp: App {
     }()
 
     // Recording: someone taking notes — the same drawing as the app icon.
-    private static let recordingMenuBarIcon: NSImage = {
+    fileprivate static let recordingMenuBarIcon: NSImage = {
         guard let image = NSImage(named: "RecordingMenuBarIcon") else { return menuBarIcon }
         image.size = NSSize(width: 18, height: 18)
         return image
     }()
+}
+
+/// The menu bar icon. It is the one view that lives as long as the app does, so it
+/// also carries out the model's requests to bring the main window back: an English
+/// recording the detector starts on its own has no button press to open it from.
+@available(macOS 26.4, *)
+private struct MenuBarLabel: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Image(nsImage: model.isRecording
+              ? LiveDictationApp.recordingMenuBarIcon
+              : LiveDictationApp.menuBarIcon)
+            .onChange(of: model.mainWindowRequest) {
+                guard !LiveDictationApp.mainWindowIsOpen else { return }
+                openWindow(id: LiveDictationApp.mainWindowID)
+            }
+    }
 }
 
 @available(macOS 26.4, *)
@@ -64,6 +89,8 @@ private struct MenuBarContent: View {
     var body: some View {
         Text(model.isRecording
              ? "録音中（\(model.currentMode.label)）"
+             : model.nextMeetingIsEnglish
+             ? "待機中（次の会議は英語で録音します）"
              : "待機中（会議を検知すると録音します）")
 
         if let warning = model.inPersonFeedWarning {
@@ -82,7 +109,23 @@ private struct MenuBarContent: View {
             Button("対面会議を開始") {
                 Task { await model.startInPersonRecording() }
             }
+            // English gets the same kind of entry: the detector starts every meeting
+            // in the mode picked in the window, which is Japanese unless someone
+            // opened the window and changed it beforehand.
+            Button("英語会議を開始") {
+                Task { await model.startEnglishRecording() }
+            }
+            Toggle("次の会議は英語で録音", isOn: Binding(
+                get: { model.nextMeetingIsEnglish },
+                set: { model.setNextMeetingEnglish($0) }
+            ))
+        } else if model.currentMode != .englishTranslation {
+            Button("英語モードに切り替える") {
+                Task { await model.switchToEnglish() }
+            }
         }
+
+        Divider()
 
         Toggle("対面会議を自動で録音", isOn: $autoStartsInPerson)
 
