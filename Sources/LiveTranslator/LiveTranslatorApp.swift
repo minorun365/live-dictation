@@ -89,8 +89,6 @@ private struct MenuBarContent: View {
     var body: some View {
         Text(model.isRecording
              ? "録音中（\(model.currentMode.label)）"
-             : model.nextMeetingIsEnglish
-             ? "待機中（次の会議は英語で録音します）"
              : "待機中（会議を検知すると録音します）")
 
         if let warning = model.inPersonFeedWarning {
@@ -115,17 +113,11 @@ private struct MenuBarContent: View {
             Button("英語会議を開始") {
                 Task { await model.startEnglishRecording() }
             }
-            Toggle("次の会議は英語で録音", isOn: Binding(
-                get: { model.nextMeetingIsEnglish },
-                set: { model.setNextMeetingEnglish($0) }
-            ))
         } else if model.currentMode != .englishTranslation {
             Button("英語モードに切り替える") {
                 Task { await model.switchToEnglish() }
             }
         }
-
-        Divider()
 
         Toggle("対面会議を自動で録音", isOn: $autoStartsInPerson)
 

@@ -41,10 +41,6 @@ final class AppModel: NSObject, ObservableObject {
     private var manualLimitTask: Task<Void, Never>?
     private var isStoppingCapture = false
     private var deferredDetectorStart = false
-    /// Armed from the menu bar before joining an English meeting: the next recording
-    /// the detector starts runs in English, once. Kept apart from `selectedMode` so the
-    /// meetings after that one fall back to Japanese without anyone resetting it.
-    @Published private(set) var nextMeetingIsEnglish = false
     /// Bumped whenever a recording needs the main window on screen. Translation runs
     /// inside the window's `translationTask`, so an English recording started while
     /// the window is closed would otherwise save no Japanese at all.
@@ -201,12 +197,7 @@ final class AppModel: NSObject, ObservableObject {
     /// entry, the mode applies to this recording only.
     func startEnglishRecording() async {
         guard !isRecording else { return }
-        nextMeetingIsEnglish = false
         await startRecording(mode: .englishTranslation)
-    }
-
-    func setNextMeetingEnglish(_ isEnglish: Bool) {
-        nextMeetingIsEnglish = isEnglish
     }
 
     /// For a meeting that turned out to be in English after the detector had already
@@ -233,18 +224,13 @@ final class AppModel: NSObject, ObservableObject {
         await stopRecording()
     }
 
-    /// Starts the recording the detector asked for, in English if that was armed.
-    /// The arming is spent only once the recording is actually running, so a failed
-    /// start does not silently turn the retry back into Japanese.
+    /// Starts the recording the detector asked for, in the mode picked in the window.
     private func startDetectorRecording() async {
-        let english = nextMeetingIsEnglish
         startedByDetector = true
-        await startRecording(mode: english ? .englishTranslation : nil)
+        await startRecording()
         // startRecording reports its own failures; only keep the flag if it worked,
         // so a failed start cannot stop a later recording made by hand.
-        if isRecording {
-            if english { nextMeetingIsEnglish = false }
-        } else {
+        if !isRecording {
             startedByDetector = false
         }
     }
