@@ -115,13 +115,16 @@ final class ScreenshotCaptureManager {
 
         let displays = content.displays.sorted { $0.frame.minX < $1.frame.minX }
         guard !displays.isEmpty else { throw ScreenshotCaptureError.noDisplay }
-        return .displays(displays)
+        let excluded = content.applications.filter {
+            CaptureExclusion.isExcluded(bundleID: $0.bundleIdentifier)
+        }
+        return .displays(displays, excluding: excluded)
     }
 }
 
 private enum CaptureTarget {
     case window(SCWindow)
-    case displays([SCDisplay])
+    case displays([SCDisplay], excluding: [SCRunningApplication])
 
     /// Long side of a saved frame. The composite of several displays gets more room
     /// so each display stays readable once they share one image.
@@ -136,7 +139,7 @@ private enum CaptureTarget {
                 "app": window.owningApplication?.bundleIdentifier ?? "",
                 "title": window.title ?? "",
             ]
-        case .displays(let displays):
+        case .displays(let displays, _):
             [
                 "target": "all_displays",
                 "displays": String(displays.count),
@@ -158,8 +161,8 @@ private enum CaptureTarget {
                 contentFilter: filter,
                 configuration: configuration
             )
-        case .displays(let displays):
-            return try await Self.captureSideBySide(displays)
+        case .displays(let displays, let excluded):
+            return try await Self.captureSideBySide(displays, excluding: excluded)
         }
     }
 
@@ -181,8 +184,13 @@ private enum CaptureTarget {
 
     /// Lays the displays out left to right in one image, top-aligned, so each saved
     /// frame still stands for the whole screen at one moment.
-    private static func captureSideBySide(_ displays: [SCDisplay]) async throws -> CGImage {
-        let filters = displays.map { SCContentFilter(display: $0, excludingWindows: []) }
+    private static func captureSideBySide(
+        _ displays: [SCDisplay],
+        excluding excluded: [SCRunningApplication]
+    ) async throws -> CGImage {
+        let filters = displays.map {
+            SCContentFilter(display: $0, excludingApplications: excluded, exceptingWindows: [])
+        }
         let sizes = filters.map(pixelSize(of:))
         let totalWidth = sizes.reduce(0) { $0 + $1.width }
         let maxHeight = sizes.map(\.height).max() ?? 1

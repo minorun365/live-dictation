@@ -4,6 +4,42 @@ import ImageIO
 import UniformTypeIdentifiers
 
 actor ScreenshotSessionStore {
+    /// How a store decides which frames to write.
+    struct Policy: Sendable {
+        /// Write every frame (the meeting-window stream), or only frames that differ
+        /// from the last written one (the full-screen stream).
+        let savesOnlyChanges: Bool
+        /// Side of the grayscale thumbnail the change test compares.
+        let thumbnailSide: Int
+        /// A frame is kept anyway after this long without one.
+        let keepAliveMilliseconds: Int64
+        /// The full-screen stream counts pixels that changed by more than this
+        /// (0–255), so one new chat line is caught but a blinking caret is not.
+        let pixelDelta: Int
+        /// Mean difference (every frame) or share of changed pixels (changes only)
+        /// at which a frame counts as changed.
+        let threshold: Double
+        let timelineIntro: String
+
+        static let everyFrame = Policy(
+            savesOnlyChanges: false,
+            thumbnailSide: 32,
+            keepAliveMilliseconds: 30_000,
+            pixelDelta: 0,
+            threshold: 0.005,
+            timelineIntro: "録音中に1秒間隔で保存した画像から、画面が変化した時点と30秒ごとの画像を抽出しています。全画像は同じフォルダにあり、`index.jsonl` で撮影時刻を確認できます。"
+        )
+
+        static let changesOnly = Policy(
+            savesOnlyChanges: true,
+            thumbnailSide: 128,
+            keepAliveMilliseconds: 60_000,
+            pixelDelta: 24,
+            threshold: 0.0005,
+            timelineIntro: "録音中のディスプレイ全体を、画面が変化したときだけ（最短3秒おき、変化が無くても60秒に1枚）保存しています。`index.jsonl` で撮影時刻を確認できます。"
+        )
+    }
+
     private struct ScreenshotRecord: Codable {
         let capturedAt: Date
         let elapsedMilliseconds: Int64
@@ -16,6 +52,7 @@ actor ScreenshotSessionStore {
     private let representativesHandle: FileHandle
     private let startedAt: Date
     private let encoder: JSONEncoder
+    private let policy: Policy
 
     private var sequence = 0
     private var representativeRecords: [ScreenshotRecord] = []
@@ -23,10 +60,16 @@ actor ScreenshotSessionStore {
     private var lastRepresentativeElapsedMilliseconds: Int64?
     private var isFinished = false
 
-    init(sessionDirectoryURL: URL, startedAt: Date = Date()) throws {
+    init(
+        sessionDirectoryURL: URL,
+        folder: String = "screenshots",
+        policy: Policy = .everyFrame,
+        startedAt: Date = Date()
+    ) throws {
         self.startedAt = startedAt
+        self.policy = policy
         directoryURL = sessionDirectoryURL.appendingPathComponent(
-            "screenshots",
+            folder,
             isDirectory: true
         )
         try FileManager.default.createDirectory(
@@ -45,14 +88,23 @@ actor ScreenshotSessionStore {
         encoder.dateEncodingStrategy = .iso8601
     }
 
-    func save(_ image: CGImage, capturedAt: Date = Date()) throws {
-        guard !isFinished else { return }
+    /// Returns whether the frame was written.
+    @discardableResult
+    func save(_ image: CGImage, capturedAt: Date = Date()) throws -> Bool {
+        guard !isFinished else { return false }
 
-        sequence += 1
         let elapsedMilliseconds = max(
             0,
             Int64(capturedAt.timeIntervalSince(startedAt) * 1_000)
         )
+        let thumbnail = Self.grayscaleThumbnail(of: image, side: policy.thumbnailSide)
+        let isRepresentative = shouldKeepAsRepresentative(
+            thumbnail: thumbnail,
+            elapsedMilliseconds: elapsedMilliseconds
+        )
+        if policy.savesOnlyChanges && !isRepresentative { return false }
+
+        sequence += 1
         let filename = String(
             format: "%06d_%010lldms.jpg",
             sequence,
@@ -62,11 +114,6 @@ actor ScreenshotSessionStore {
 
         try Self.writeJPEG(image, to: imageURL)
 
-        let thumbnail = Self.grayscaleThumbnail(of: image)
-        let isRepresentative = shouldKeepAsRepresentative(
-            thumbnail: thumbnail,
-            elapsedMilliseconds: elapsedMilliseconds
-        )
         let record = ScreenshotRecord(
             capturedAt: capturedAt,
             elapsedMilliseconds: elapsedMilliseconds,
@@ -81,6 +128,7 @@ actor ScreenshotSessionStore {
             lastRepresentativeElapsedMilliseconds = elapsedMilliseconds
             try append(record, to: representativesHandle)
         }
+        return true
     }
 
     func finish() throws {
@@ -105,7 +153,7 @@ actor ScreenshotSessionStore {
             return true
         }
 
-        if elapsedMilliseconds - previousElapsed >= 30_000 {
+        if elapsedMilliseconds - previousElapsed >= policy.keepAliveMilliseconds {
             return true
         }
 
@@ -113,12 +161,19 @@ actor ScreenshotSessionStore {
             return true
         }
 
+        if policy.pixelDelta > 0 {
+            let changed = zip(previous, thumbnail).reduce(0) { result, pair in
+                abs(Int(pair.0) - Int(pair.1)) > policy.pixelDelta ? result + 1 : result
+            }
+            return Double(changed) / Double(thumbnail.count) >= policy.threshold
+        }
+
         let totalDifference = zip(previous, thumbnail).reduce(0) { result, pair in
             result + abs(Int(pair.0) - Int(pair.1))
         }
         let normalizedDifference = Double(totalDifference)
             / Double(thumbnail.count * 255)
-        return normalizedDifference >= 0.005
+        return normalizedDifference >= policy.threshold
     }
 
     private func append(_ record: ScreenshotRecord, to handle: FileHandle) throws {
@@ -128,12 +183,7 @@ actor ScreenshotSessionStore {
     }
 
     private func writeTimeline() throws {
-        var markdown = """
-        # 画面記録
-
-        録音中に1秒間隔で保存した画像から、画面が変化した時点と30秒ごとの画像を抽出しています。全画像は同じフォルダにあり、`index.jsonl` で撮影時刻を確認できます。
-
-        """
+        var markdown = "# 画面記録\n\n\(policy.timelineIntro)\n"
 
         for record in representativeRecords {
             let elapsed = Self.elapsedLabel(milliseconds: record.elapsedMilliseconds)
@@ -174,9 +224,9 @@ actor ScreenshotSessionStore {
         }
     }
 
-    private static func grayscaleThumbnail(of image: CGImage) -> [UInt8] {
-        let width = 32
-        let height = 32
+    private static func grayscaleThumbnail(of image: CGImage, side: Int) -> [UInt8] {
+        let width = side
+        let height = side
         var pixels = [UInt8](repeating: 0, count: width * height)
         let colorSpace = CGColorSpaceCreateDeviceGray()
 

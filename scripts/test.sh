@@ -73,3 +73,21 @@ swiftc \
     -o "${GATE_TEST_BINARY}"
 
 "${GATE_TEST_BINARY}"
+
+EXCLUSION_TEST_BINARY="${TMPDIR:-/tmp}/live-dictation-capture-exclusion-test"
+swiftc \
+    -module-cache-path "${MODULE_CACHE}" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/CaptureExclusion.swift" \
+    "${PROJECT_DIR}/Tests/CaptureExclusionSelfTest.swift" \
+    -o "${EXCLUSION_TEST_BINARY}"
+
+"${EXCLUSION_TEST_BINARY}"
+
+CHANGE_STORE_TEST_BINARY="${TMPDIR:-/tmp}/live-dictation-screen-change-store-test"
+swiftc \
+    -module-cache-path "${MODULE_CACHE}" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/ScreenshotSessionStore.swift" \
+    "${PROJECT_DIR}/Tests/ScreenChangeStoreSelfTest.swift" \
+    -o "${CHANGE_STORE_TEST_BINARY}"
+
+"${CHANGE_STORE_TEST_BINARY}"

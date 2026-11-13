@@ -69,6 +69,7 @@ final class AppModel: NSObject, ObservableObject {
 
     private var selectedSessionTranscript: SavedSessionTranscript?
     private let screenshotCaptureManager = ScreenshotCaptureManager()
+    private let fullScreenCaptureManager = FullScreenCaptureManager()
 
     private let translationStream: AsyncStream<TranslationWork>
     private let translationContinuation: AsyncStream<TranslationWork>.Continuation
@@ -564,6 +565,7 @@ final class AppModel: NSObject, ObservableObject {
                         payload: ["message": error.localizedDescription]
                     )
                 }
+                await startFullScreenCapture(for: recordingSession)
             }
 
             for channel in newChannels {
@@ -693,6 +695,7 @@ final class AppModel: NSObject, ObservableObject {
             channel.continuation.finish()
         }
         await screenshotCaptureManager.stop()
+        await fullScreenCaptureManager.stop()
         isSavingScreenshots = false
         isStoppingCapture = false
 
@@ -1109,6 +1112,7 @@ final class AppModel: NSObject, ObservableObject {
 
     private func cleanUpAudio(for recordingSession: RecordingSession) async {
         await screenshotCaptureManager.stop()
+        await fullScreenCaptureManager.stop()
         isSavingScreenshots = false
         await meetingAudioCaptureManager.stop()
         for channel in recordingSession.channels {
@@ -1564,6 +1568,42 @@ final class AppModel: NSObject, ObservableObject {
             "録音を開始すると、英語を日本語へ翻訳します"
         case .inPersonEnglish:
             "同じ部屋での英語を、日本語へ翻訳します"
+        }
+    }
+
+    /// The second screen record: every display, apart from password managers, saved
+    /// whenever it changes. Runs beside the meeting-window record and fails on its own.
+    private func startFullScreenCapture(for recordingSession: RecordingSession) async {
+        let logger = recordingSession.logger
+        do {
+            try await fullScreenCaptureManager.start(
+                sessionDirectoryURL: logger.directoryURL,
+                onDisplaysChange: { payload in
+                    recordingSession.logger.appendEvent(
+                        type: "full_screen_capture_displays",
+                        payload: payload
+                    )
+                },
+                onFailure: { message in
+                    recordingSession.logger.appendEvent(
+                        type: "full_screen_capture_failed",
+                        payload: ["message": message]
+                    )
+                }
+            )
+            logger.appendEvent(
+                type: "full_screen_capture_started",
+                payload: [
+                    "interval_seconds": String(FullScreenCaptureManager.intervalSeconds),
+                    "saves": "changes_only",
+                    "folder": "screens",
+                ]
+            )
+        } catch {
+            logger.appendEvent(
+                type: "full_screen_capture_failed",
+                payload: ["message": error.localizedDescription]
+            )
         }
     }
 
