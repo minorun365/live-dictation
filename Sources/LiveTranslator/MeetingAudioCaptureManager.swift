@@ -13,6 +13,17 @@ import Speech
 /// When the sources stay separate they are also recorded separately, which keeps a session
 /// re-analyzable per speaker afterwards.
 final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
+    /// What the microphone silence check found, for the session log and the user.
+    enum MicrophoneSilenceEvent: Sendable {
+        /// The microphone has delivered nothing audible for `seconds`.
+        case silent(seconds: Int)
+        /// The capture was torn down and started again to rebind the microphone.
+        case restarted(attempt: Int, silentSeconds: Int)
+        case restartFailed(message: String)
+        /// Sound came back after a silent stretch.
+        case recovered(silentSeconds: Int, restarts: Int)
+    }
+
     /// One captured signal: where its audio is recognized, and where it is recorded.
     struct Destination {
         let continuation: AsyncStream<AnalyzerInput>.Continuation
@@ -59,6 +70,12 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
     private var sourceReadyHandler: (@MainActor @Sendable (String) -> Void)?
     private var recoveryHandler: (@MainActor @Sendable (Int) -> Void)?
     private var engineRestartHandler: (@MainActor @Sendable (String) -> Void)?
+    private var microphoneSilenceHandler: (@MainActor @Sendable (MicrophoneSilenceEvent) -> Void)?
+    private var silenceMonitor = MicrophoneSilenceMonitor()
+    private var lastMicrophoneSampleAt: Date?
+    /// Silent-stretch lengths already reported, so each is told once per stretch.
+    private var reportedSilenceMarks: Set<Int> = []
+    private var silenceRestartTask: Task<Void, Never>?
     private var engineConfigurationObserver: NSObjectProtocol?
     /// Reports a failed engine restart only once; cleared when a restart succeeds.
     private var reportedEngineRestartFailure = false
@@ -84,13 +101,20 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         onSourceReady: @escaping @MainActor @Sendable (String) -> Void,
         onRecovered: @escaping @MainActor @Sendable (Int) -> Void,
         onEngineRestarted: @escaping @MainActor @Sendable (String) -> Void,
+        onMicrophoneSilence: @escaping @MainActor @Sendable (MicrophoneSilenceEvent) -> Void,
         onRuntimeFailure: @escaping @MainActor @Sendable (String) -> Void
     ) async throws {
         await stop()
-        stateLock.withLock { isTearingDown = false }
+        stateLock.withLock {
+            isTearingDown = false
+            silenceMonitor.reset()
+            lastMicrophoneSampleAt = nil
+            reportedSilenceMarks = []
+        }
         sourceReadyHandler = onSourceReady
         recoveryHandler = onRecovered
         engineRestartHandler = onEngineRestarted
+        microphoneSilenceHandler = onMicrophoneSilence
         runtimeFailureHandler = onRuntimeFailure
 
         do {
@@ -427,6 +451,7 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
 
                 // Retries an engine restart that failed after a configuration change.
                 self.restartEngineIfStopped(trigger: "watchdog")
+                self.checkMicrophoneSilence(at: Date())
 
                 let gap = self.stateLock.withLock { () -> TimeInterval? in
                     guard let last = self.lastSampleAt else { return nil }
@@ -474,6 +499,98 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
     private static let slowRecoveryInterval = 15
     /// 約2時間ぶん。これを超えて画面が戻らないなら、録音を続ける意味がない。
     private static let recoveryAttemptLimit = 480
+
+    // MARK: - Microphone silence
+
+    private func noteMicrophoneSample(_ buffer: AVAudioPCMBuffer) {
+        guard let channel = buffer.floatChannelData?[0] else { return }
+        let peak = MicrophoneSilenceMonitor.peak(of: channel, count: Int(buffer.frameLength))
+        let now = Date()
+        let action = stateLock.withLock { () -> MicrophoneSilenceMonitor.Action in
+            lastMicrophoneSampleAt = now
+            return silenceMonitor.observe(peak: peak, at: now)
+        }
+        handle(action, at: now)
+    }
+
+    /// Run from the watchdog. Buffers that stop arriving altogether count as silence too,
+    /// and long stretches are reported to the app even when no buffer arrives to say so.
+    private func checkMicrophoneSilence(at now: Date) {
+        let (action, seconds) = stateLock.withLock { () -> (MicrophoneSilenceMonitor.Action, TimeInterval?) in
+            // Before the first microphone buffer the capture is still starting up.
+            guard let last = lastMicrophoneSampleAt else { return (.none, nil) }
+            var action = MicrophoneSilenceMonitor.Action.none
+            if now.timeIntervalSince(last) > Self.sampleGapTolerance {
+                action = silenceMonitor.observe(peak: 0, at: now)
+            }
+            return (action, silenceMonitor.silentSeconds(at: now))
+        }
+        handle(action, at: now)
+
+        guard let seconds else {
+            stateLock.withLock { reportedSilenceMarks = [] }
+            return
+        }
+        for mark in Self.silenceReportMarks where seconds >= TimeInterval(mark) {
+            let isNew = stateLock.withLock { reportedSilenceMarks.insert(mark).inserted }
+            if isNew {
+                emit(.silent(seconds: mark))
+            }
+        }
+    }
+
+    private func handle(_ action: MicrophoneSilenceMonitor.Action, at now: Date) {
+        switch action {
+        case .none:
+            return
+        case .recovered(let silentSeconds, let restarts):
+            stateLock.withLock { reportedSilenceMarks = [] }
+            emit(.recovered(silentSeconds: silentSeconds, restarts: restarts))
+        case .restartCapture(let attempt):
+            // With the lid shut the microphone is cut in hardware; silence is expected
+            // and the wake observers reconnect once the lid opens.
+            if LidState.isClosedWithScreensAsleep() { return }
+            let silentSeconds = stateLock.withLock {
+                Int(silenceMonitor.silentSeconds(at: now) ?? 0)
+            }
+            restartCaptureForSilence(attempt: attempt, silentSeconds: silentSeconds)
+        }
+    }
+
+    /// Starting the stream again rebinds the microphone. Unlike `recoverCapture` this
+    /// makes a single attempt: the monitor decides whether another one is due.
+    private func restartCaptureForSilence(attempt: Int, silentSeconds: Int) {
+        stateLock.withLock {
+            guard !isTearingDown, recoveryTask == nil, silenceRestartTask == nil else { return }
+            silenceRestartTask = Task { [weak self] in
+                guard let self else { return }
+                defer { self.stateLock.withLock { self.silenceRestartTask = nil } }
+                if let previous = self.stream {
+                    try? await previous.stopCapture()
+                    self.stream = nil
+                }
+                if self.stateLock.withLock({ self.isTearingDown }) { return }
+                self.reportedMicrophoneReady = false
+                do {
+                    try await self.startCapture()
+                    self.emit(.restarted(attempt: attempt, silentSeconds: silentSeconds))
+                } catch {
+                    self.emit(.restartFailed(message: error.localizedDescription))
+                    // The arrival watchdog takes over from here and keeps retrying.
+                }
+            }
+        }
+    }
+
+    private func emit(_ event: MicrophoneSilenceEvent) {
+        guard let microphoneSilenceHandler else { return }
+        Task { @MainActor in
+            microphoneSilenceHandler(event)
+        }
+    }
+
+    /// Lengths of a silent stretch, in seconds, that are reported to the app.
+    private static let silenceReportMarks = [30, 180]
 
     private func attach(_ node: AVAudioNode) {
         audioEngine.attach(node)
@@ -539,6 +656,13 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         }
         pendingRecovery?.cancel()
         pendingWatchdog?.cancel()
+        let pendingSilenceRestart = stateLock.withLock { () -> Task<Void, Never>? in
+            let task = silenceRestartTask
+            silenceRestartTask = nil
+            lastMicrophoneSampleAt = nil
+            return task
+        }
+        pendingSilenceRestart?.cancel()
         removeEngineConfigurationObserver()
         removeWakeObservers()
         displaySleepBlocker.end()
@@ -582,6 +706,7 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         sourceReadyHandler = nil
         recoveryHandler = nil
         engineRestartHandler = nil
+        microphoneSilenceHandler = nil
         stateLock.withLock { reportedEngineRestartFailure = false }
         reportedMicrophoneReady = false
         reportedSystemAudioReady = false
@@ -598,6 +723,7 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
         case .microphone:
             microphonePlayer.scheduleBuffer(converted)
             noteSampleArrived()
+            noteMicrophoneSample(converted)
             reportSourceReadyIfNeeded(type: type)
         case .audio:
             systemAudioPlayer.scheduleBuffer(converted)

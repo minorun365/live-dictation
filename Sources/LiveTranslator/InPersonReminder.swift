@@ -132,6 +132,17 @@ final class InPersonReminder: NSObject {
                 Task { @MainActor in self?.evaluate() }
             }
         }
+        // An automatic start held back on the lock screen goes ahead once it unlocks.
+        let distributed = DistributedNotificationCenter.default()
+        wakeObservers.append(
+            distributed.addObserver(
+                forName: Notification.Name("com.apple.screenIsUnlocked"),
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.evaluate() }
+            }
+        )
         evaluate()
     }
 
@@ -172,6 +183,15 @@ final class InPersonReminder: NSObject {
                 // the lid to open; the screens-wake check above picks it up right away.
                 if LidState.isClosedWithScreensAsleep() {
                     logger.info("deferring auto start for \(meeting.reminderKey, privacy: .public): lid closed")
+                    return
+                }
+                // A capture started on the lock screen comes up without a working
+                // microphone and records silence for the whole meeting. The lid-closed
+                // check above has also let dark wakes through, which left empty sessions
+                // behind. Waiting for the unlock covers both; the unlock observer below
+                // picks the start up the moment the screen opens.
+                if LidState.isScreenLocked() {
+                    logger.info("deferring auto start for \(meeting.reminderKey, privacy: .public): screen locked")
                     return
                 }
                 reminded.insert(meeting.reminderKey)
@@ -422,6 +442,13 @@ extension InPersonReminder: UNUserNotificationCenterDelegate {
 enum LidState {
     static func isClosedWithScreensAsleep() -> Bool {
         isLidClosed() && CGDisplayIsAsleep(CGMainDisplayID()) != 0
+    }
+
+    /// Whether the login session's screen is locked (including the lock that follows
+    /// closing the lid). Read from the window server's session dictionary.
+    static func isScreenLocked() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        return (session["CGSSessionScreenIsLocked"] as? Bool) ?? false
     }
 
     private static func isLidClosed() -> Bool {

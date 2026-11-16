@@ -617,6 +617,9 @@ final class AppModel: NSObject, ObservableObject {
                           self.sessionRegistry.isActive(id: recordingSession.id) else { return }
                     self.errorMessage = nil
                     self.statusMessage = self.recordingStatusMessage(for: recordingMode)
+                },
+                onMicrophoneSilence: { [weak self] event in
+                    self?.handleMicrophoneSilence(event, session: recordingSession, mode: recordingMode)
                 }
             ) { [weak self] message in
                 guard let self else { return }
@@ -1647,6 +1650,44 @@ private final class RecognitionChannel {
         self.transcriber = transcriber
         self.continuation = continuation
         self.inputStream = inputStream
+    }
+}
+
+@available(macOS 26.4, *)
+extension AppModel {
+    /// Logs what the microphone silence check found and, once a stretch has lasted long
+    /// enough for this mode, tells the user while the meeting can still be saved.
+    fileprivate func handleMicrophoneSilence(
+        _ event: MeetingAudioCaptureManager.MicrophoneSilenceEvent,
+        session: RecordingSession,
+        mode: TranscriptionMode
+    ) {
+        let sessionID = session.logger.directoryURL.lastPathComponent
+        let isActive = sessionRegistry.isActive(id: session.id)
+        switch event {
+        case .silent(let seconds):
+            session.logger.appendEvent(type: "microphone_silent", payload: ["seconds": String(seconds)])
+            guard isActive, seconds >= MicrophoneSilenceNotice.notifyAfterSeconds(for: mode) else { return }
+            MicrophoneSilenceNotice.post(sessionID: sessionID, seconds: seconds)
+            errorMessage = "マイクの音が入っていません（\(seconds)秒間無音）"
+            statusMessage = "録音中（マイク無音）"
+        case .restarted(let attempt, let silentSeconds):
+            session.logger.appendEvent(
+                type: "microphone_capture_restarted",
+                payload: ["attempt": String(attempt), "silent_seconds": String(silentSeconds)]
+            )
+        case .restartFailed(let message):
+            session.logger.appendEvent(type: "microphone_capture_restart_failed", payload: ["message": message])
+        case .recovered(let silentSeconds, let restarts):
+            session.logger.appendEvent(
+                type: "microphone_recovered",
+                payload: ["silent_seconds": String(silentSeconds), "restarts": String(restarts)]
+            )
+            MicrophoneSilenceNotice.withdraw(sessionID: sessionID)
+            guard isActive else { return }
+            errorMessage = nil
+            statusMessage = recordingStatusMessage(for: mode)
+        }
     }
 }
 

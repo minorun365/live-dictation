@@ -91,3 +91,12 @@ swiftc \
     -o "${CHANGE_STORE_TEST_BINARY}"
 
 "${CHANGE_STORE_TEST_BINARY}"
+
+SILENCE_TEST_BINARY="${TMPDIR:-/tmp}/live-dictation-microphone-silence-test"
+swiftc \
+    -module-cache-path "${MODULE_CACHE}" \
+    "${PROJECT_DIR}/Sources/LiveTranslator/MicrophoneSilenceMonitor.swift" \
+    "${PROJECT_DIR}/Tests/MicrophoneSilenceMonitorSelfTest.swift" \
+    -o "${SILENCE_TEST_BINARY}"
+
+"${SILENCE_TEST_BINARY}"
