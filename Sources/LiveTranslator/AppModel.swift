@@ -244,6 +244,32 @@ final class AppModel: NSObject, ObservableObject {
         await stopRecording()
     }
 
+    /// For a room recording that turns out to be a web meeting: a meeting app took the
+    /// microphone while the in-person mode was recording, typically because the
+    /// calendar entry named a booth booked for a Zoom call. Closes it and records the
+    /// rest in the matching web-meeting mode, with speaker labels and the screen. The
+    /// new recording belongs to the detector, so it ends when the meeting app lets go.
+    private func switchToWebMeetingIfInPerson() async {
+        guard isRecording, !isStoppingCapture, pendingRestart == nil,
+              let session = activeSession,
+              let web = session.mode.webMeetingCounterpart else { return }
+        session.logger.appendEvent(
+            type: "mode_switch_requested",
+            payload: [
+                "from": session.mode.rawValue,
+                "to": web.rawValue,
+                "reason": "meeting_app_detected"
+            ]
+        )
+        WebMeetingSwitchNotice.post(to: web)
+        pendingRestart = PendingRestart(
+            mode: web,
+            fallback: session.mode,
+            byDetector: true
+        )
+        await stopRecording()
+    }
+
     /// Starts the recording the detector asked for, in the mode picked in the window.
     private func startDetectorRecording() async {
         startedByDetector = true
@@ -295,7 +321,10 @@ final class AppModel: NSObject, ObservableObject {
                 deferredDetectorStart = true
                 return
             }
-            guard !isRecording else { return }
+            guard !isRecording else {
+                await switchToWebMeetingIfInPerson()
+                return
+            }
             await startDetectorRecording()
         case .idle:
             // Leave recordings started by hand alone — the meeting app releasing the

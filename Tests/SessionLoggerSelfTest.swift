@@ -198,6 +198,15 @@ struct SessionLoggerSelfTest {
             throw SelfTestError.invalidSessionIsolation
         }
 
+        // A room recording that a meeting app joins moves to the matching web-meeting
+        // mode; recordings already made for web meetings stay as they are.
+        guard TranscriptionMode.inPerson.webMeetingCounterpart == .japanese,
+              TranscriptionMode.inPersonEnglish.webMeetingCounterpart == .englishTranslation,
+              TranscriptionMode.japanese.webMeetingCounterpart == nil,
+              TranscriptionMode.englishTranslation.webMeetingCounterpart == nil else {
+            throw SelfTestError.invalidWebMeetingCounterpart
+        }
+
         print("SessionLogger self-test passed")
     }
 
@@ -225,6 +234,7 @@ struct SessionLoggerSelfTest {
 }
 
 private enum SelfTestError: Error {
+    case invalidWebMeetingCounterpart
     case missingLogFiles
     case invalidTranscript
     case invalidEvents

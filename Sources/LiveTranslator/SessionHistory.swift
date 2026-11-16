@@ -43,6 +43,18 @@ enum TranscriptionMode: String, CaseIterable, Identifiable {
     /// Whether the screen is recorded alongside the audio. In a meeting room the Mac's
     /// own screen shows nothing worth keeping, and it costs about 22MB per minute.
     var capturesScreen: Bool { self != .inPerson && self != .inPersonEnglish }
+
+    /// The web-meeting mode to move to when a meeting app takes the microphone during
+    /// a room recording. A room booked only to sit in on a Zoom call still lands on the
+    /// in-person path from the calendar, and keeping that recording would lose the
+    /// speaker labels and the screen. `nil` for modes already made for web meetings.
+    var webMeetingCounterpart: TranscriptionMode? {
+        switch self {
+        case .inPerson: .japanese
+        case .inPersonEnglish: .englishTranslation
+        case .japanese, .englishTranslation: nil
+        }
+    }
 }
 
 struct SessionHistoryItem: Identifiable, Hashable {
