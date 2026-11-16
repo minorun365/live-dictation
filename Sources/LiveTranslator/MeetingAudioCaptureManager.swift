@@ -590,7 +590,7 @@ final class MeetingAudioCaptureManager: NSObject, @unchecked Sendable {
     }
 
     /// Lengths of a silent stretch, in seconds, that are reported to the app.
-    private static let silenceReportMarks = [30, 180]
+    private static let silenceReportMarks = [10, 30, 180]
 
     private func attach(_ node: AVAudioNode) {
         audioEngine.attach(node)

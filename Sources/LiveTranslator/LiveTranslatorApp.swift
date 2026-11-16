@@ -87,6 +87,10 @@ private struct MenuBarContent: View {
     @AppStorage(InPersonReminder.autoStartDefaultsKey) private var autoStartsInPerson = false
 
     var body: some View {
+        // Which microphone a recording would use, so a headset that woke up in a bag
+        // is noticed before a room meeting starts, not after.
+        Text(model.currentMicrophone?.menuLabel ?? "マイク：見つかりません")
+
         Text(model.isRecording
              ? "録音中（\(model.currentMode.label)）"
              : "待機中（会議を検知すると録音します）")

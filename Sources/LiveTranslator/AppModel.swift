@@ -25,6 +25,9 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var isSavingScreenshots = false
     @Published private(set) var statusMessage = "録音を開始すると、日本語を文字起こしします"
     @Published private(set) var errorMessage: String?
+    /// macOS's default input, shown at the top of the menu bar menu.
+    @Published private(set) var currentMicrophone: MicrophoneDevice?
+    private var microphoneWatcher: MicrophoneDeviceWatcher?
 
     private let meetingAudioCaptureManager = MeetingAudioCaptureManager()
     private let meetingDetector = MeetingDetector()
@@ -86,6 +89,16 @@ final class AppModel: NSObject, ObservableObject {
         startMeetingDetection()
         startInPersonReminders()
         registerTerminationGate()
+        startMicrophoneWatch()
+    }
+
+    private func startMicrophoneWatch() {
+        currentMicrophone = MicrophoneDevice.current()
+        let watcher = MicrophoneDeviceWatcher { [weak self] in
+            self?.currentMicrophone = MicrophoneDevice.current()
+        }
+        watcher.start()
+        microphoneWatcher = watcher
     }
 
     /// 終了の操作（⌘Q・メニュー・Dock・ログアウト）を、録音の保存が終わるまで保留させる。
@@ -636,6 +649,7 @@ final class AppModel: NSObject, ObservableObject {
                 type: "meeting_audio_capture_started",
                 payload: ["sources": "microphone,system_audio"]
             )
+            checkMicrophone(for: recordingSession, mode: recordingMode)
         } catch {
             if let createdSession {
                 await cleanUpAudio(for: createdSession)
@@ -1657,6 +1671,27 @@ private final class RecognitionChannel {
 extension AppModel {
     /// Logs what the microphone silence check found and, once a stretch has lasted long
     /// enough for this mode, tells the user while the meeting can still be saved.
+    /// Records which microphone the session captures from, and warns at once when a room
+    /// recording starts on anything but the Mac's own microphone.
+    fileprivate func checkMicrophone(for session: RecordingSession, mode: TranscriptionMode) {
+        let device = MicrophoneDevice.current()
+        currentMicrophone = device
+        session.logger.appendEvent(
+            type: "microphone_device",
+            payload: [
+                "name": device?.name ?? "なし",
+                "kind": device.map { "\($0.kind)" } ?? "none"
+            ]
+        )
+        guard mode == .inPerson || mode == .inPersonEnglish,
+              let device, !device.isBuiltIn else { return }
+        MicrophoneSilenceNotice.postRoomDeviceWarning(
+            sessionID: session.logger.directoryURL.lastPathComponent,
+            device: device
+        )
+        errorMessage = "対面モードなのに、マイクが「\(device.name)」です"
+    }
+
     fileprivate func handleMicrophoneSilence(
         _ event: MeetingAudioCaptureManager.MicrophoneSilenceEvent,
         session: RecordingSession,
@@ -1667,7 +1702,8 @@ extension AppModel {
         switch event {
         case .silent(let seconds):
             session.logger.appendEvent(type: "microphone_silent", payload: ["seconds": String(seconds)])
-            guard isActive, seconds >= MicrophoneSilenceNotice.notifyAfterSeconds(for: mode) else { return }
+            // Each mark is reported once per silent stretch; tell the user at this mode's mark only.
+            guard isActive, seconds == MicrophoneSilenceNotice.notifyAfterSeconds(for: mode) else { return }
             MicrophoneSilenceNotice.post(sessionID: sessionID, seconds: seconds)
             errorMessage = "マイクの音が入っていません（\(seconds)秒間無音）"
             statusMessage = "録音中（マイク無音）"

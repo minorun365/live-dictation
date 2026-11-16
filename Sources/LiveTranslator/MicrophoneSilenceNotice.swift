@@ -9,11 +9,13 @@ enum MicrophoneSilenceNotice {
     private static let logger = Logger(subsystem: "com.minorun365.LiveDictation", category: "MicrophoneSilenceNotice")
 
     /// Seconds of silence after which the user is told. A room recording has nothing
-    /// but the microphone, so it is told early. A web meeting with a headset that gates
-    /// its own noise can stay silent while the wearer listens, so it waits longer.
+    /// but the microphone and a room is never digitally silent, so it is told within
+    /// seconds. A web meeting with a headset that gates its own noise can stay silent
+    /// while the wearer listens, so it waits longer. Each value must be one of the
+    /// marks `MeetingAudioCaptureManager` reports.
     static func notifyAfterSeconds(for mode: TranscriptionMode) -> Int {
         switch mode {
-        case .inPerson, .inPersonEnglish: 30
+        case .inPerson, .inPersonEnglish: 10
         case .japanese, .englishTranslation: 180
         }
     }
@@ -26,6 +28,25 @@ enum MicrophoneSilenceNotice {
 
         let request = UNNotificationRequest(
             identifier: "microphoneSilent.\(sessionID)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                logger.error("post failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    static func postRoomDeviceWarning(sessionID: String, device: MicrophoneDevice) {
+        let content = UNMutableNotificationContent()
+        content.title = "対面モードのマイクが「\(device.name)」です"
+        content.body = device.kind == .bluetooth
+            ? "Bluetoothのヘッドセットがつながっています。かばんの中で電源が入っていないか確かめ、切ってから録音を始め直してください"
+            : "Macの内蔵マイクではありません。会議室の声が入らないことがあります"
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "roomMicrophone.\(sessionID)",
             content: content,
             trigger: nil
         )
